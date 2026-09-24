@@ -6,7 +6,7 @@ Internal IT ticketing and support management system.
 
 The system allows employees to report IT problems and enables the IT department to receive, route, prioritise, assign, communicate about, resolve and report on support tickets.
 
-## Technology Stack
+## Approved Technology Stack
 
 * Frontend: Next.js, TypeScript, Tailwind CSS, shadcn/ui
 * Backend: Django, Django REST Framework
@@ -15,9 +15,7 @@ The system allows employees to report IT problems and enables the IT department 
 * Background processing: Celery
 * Queue/cache: Redis
 * File storage: MinIO
-* Reverse proxy: Nginx
-* Deployment: Docker Compose
-* Server: Ubuntu Server LTS
+* Deployment: Docker Compose for local development; production deployment remains environment-dependent and portable across the company server setup
 
 ## Documentation
 
@@ -34,3 +32,20 @@ Implementation should follow:
 Project documentation completed.
 
 Implementation phase: Project Foundation.
+
+## Local Foundation Commands
+
+```bash
+cd backend
+python manage.py check --settings=config.settings.dev
+python manage.py runserver 0.0.0.0:8000
+```
+
+```bash
+cd frontend
+npm run dev
+```
+
+```bash
+docker compose up -d postgres redis minio
+```

@@ -1,6 +1,12 @@
+Absolutely. Below is the revised `01-business-context.md` . I have incorporated the 
+
+decisions we made about the **company's dedicated cPanel environment** , **deployment portability** , and **future Active Directory/LDAP integration** , while keeping the original business context and avoiding assumptions about the server's exact OS or runtime configuration. 
+
+01-business-context.md 
+
 # **IT Ticketing System — Business Context** 
 
-# **1. Document Purpose** 
+## **1. Document Purpose** 
 
 This document defines the organisational context, business problem, purpose, users, operating environment, goals, constraints, and overall context of the Internal IT Ticketing System. 
 
@@ -8,17 +14,17 @@ It provides the foundation for the product and technical requirements that follo
 
 This document describes **why the system is being developed and the business environment in which it will operate** . Detailed system behaviour is defined in the subsequent project documents. 
 
-# **2. Business Context** 
+## **2. Business Context** 
 
-The organisation's IT department provides technical support to employees across different offices or stations. IT-related problems currently need to be received, communicated, assigned, tracked, resolved, and followed up by the IT support team. 
+The organisation's IT department provides technical support to employees across different offices or stations. IT-related problems need to be received, communicated, assigned, tracked, resolved, and followed up by the IT support team. 
 
 As the number of users, IT issues, and operating locations increases, relying on informal communication and manual tracking can make it difficult to maintain a consistent support process. 
 
 The proposed IT Ticketing System will provide a central platform through which employees can report IT problems and the IT department can manage those problems from initial submission through resolution and closure. 
 
-The system will primarily operate on the organisation's internal network (intranet). 
+The system will primarily operate as an **internal organisational application** , accessible through the company's network and hosted within the company's existing server infrastructure. 
 
-# **3. Business Problem** 
+## **3. Business Problem** 
 
 The organisation needs a structured way to manage internal IT support requests. 
 
@@ -40,7 +46,9 @@ Without a central ticketing system, common challenges can include:
 
 - Difficulty maintaining a history of actions taken on a ticket. 
 
-- Limited separation between communication with employees and private communication between IT personnel. 
+- Limited separation between communication with employees and private 
+
+- communication between IT personnel. 
 
 - Difficulty measuring IT support activity and performance. 
 
@@ -48,7 +56,7 @@ Without a central ticketing system, common challenges can include:
 
 The system is intended to address these operational challenges by introducing a centralised and traceable support workflow. 
 
-# **4. Business Purpose** 
+## **4. Business Purpose** 
 
 The primary purpose of the system is to provide a centralised IT support platform that enables the organisation to: 
 
@@ -70,67 +78,117 @@ The primary purpose of the system is to provide a centralised IT support platfor
 
 9. Track the complete lifecycle of each ticket. 
 
-- 10.Collect user feedback after resolution. 
+10. Collect user feedback after resolution. 
 
-- 11.Automatically reopen tickets when users indicate that a problem has not been satisfactorily resolved. 
+11. Automatically reopen tickets when users indicate that a problem has not been satisfactorily resolved. 
 
-- 12.Maintain historical records and audit trails. 
+12. Maintain historical records and audit trails. 
 
-13.Provide administrative management and reporting capabilities. 
+13. Provide administrative management and reporting capabilities. 
 
-# **5. Operating Environment** 
+## **5. Operating Environment** 
 
 The system is intended primarily for internal organisational use. 
 
-The initial deployment environment will be an **intranet application** , with employees and IT personnel accessing the system through the organisation's internal network. 
+The initial application will operate as an **intranet-oriented web application** and is intended to be hosted on the company's existing dedicated server environment. 
 
-The proposed deployment architecture will use: 
+The company currently uses a dedicated server environment with cPanel. The exact production operating system, web-server configuration, available runtime services, and server-level capabilities have not been formally confirmed as part of this project. 
 
-- Ubuntu Server LTS 
+Therefore, the application must be developed to be **portable and deploymentenvironment independent** . 
 
-- Docker Compose 
+The application must not make its business logic dependent on: 
 
-- Nginx 
+- cPanel. 
 
-- Next.js 
+- A specific operating system. 
 
-- Django 
+- A specific production web server. 
 
-- Django REST Framework 
+- A specific hosting control panel. 
 
-- PostgreSQL 
+The application architecture should instead separate the application itself from the production hosting layer. 
 
-- Redis 
+The approved application stack is: 
 
-- Celery 
+- Frontend: Next.js 
 
-- Django Channels 
+- Frontend language: TypeScript 
 
-- MinIO 
+- Backend: Django 
 
-- Company SMTP infrastructure 
+- API: Django REST Framework 
 
-The detailed technical architecture and deployment configuration are defined in: 
+- Database: PostgreSQL 
 
-- 08-system-architecture.md 
+- Real-time communication: Django Channels/WebSockets 
 
-- 12-deployment.md 
+- Background processing: Celery 
 
-# **6. Initial Operating Locations** 
+- Task queue/cache: Redis 
+
+- File storage: MinIO initially 
+
+- Development/deployment packaging: Docker Compose where supported Email: Company SMTP infrastructure 
+
+The exact production deployment method will be determined according to the capabilities and policies of the company's dedicated server environment. 
+
+## **6. Existing Company Infrastructure** 
+
+The organisation already operates a web application through its existing hosting environment, including a test HRMS application hosted under a company subdomain. 
+
+The known example is: 
+
+```
+test.omnigroupafricahrms.com
+```
+
+This demonstrates that the organisation's infrastructure supports subdomain-based web applications. 
+
+However, the publicly observable HRMS application does not provide sufficient evidence to establish the exact underlying production technology stack, operating system, web server, database, containerisation method, or available background services. 
+
+Therefore, the ticketing system must not assume that the HRMS application's technology stack is the same as the ticketing system's technology stack. 
+
+The ticketing application should instead be designed so that it can be deployed alongside existing company applications without requiring the existing applications to be modified. 
+
+## **7. Existing Active Directory Environment** 
+
+The organisation uses **Windows Active Directory** as part of its existing IT infrastructure. 
+
+The ticketing system should therefore be designed with future integration with Active Directory/LDAP in mind. 
+
+Active Directory integration may eventually provide capabilities such as: 
+
+- Centralised employee authentication. 
+
+- Use of existing organisational accounts. 
+
+- Retrieval of employee names and email addresses. 
+
+- Group-based identity information. 
+
+- Potential integration between organisational groups and application permissions. 
+
+However, **Active Directory/LDAP integration is outside the initial MVP unless explicitly brought into scope** . 
+
+The MVP authentication system must therefore remain functional without requiring Active Directory. 
+
+The application architecture must nevertheless avoid authentication decisions that would prevent or unnecessarily complicate future AD/LDAP integration. 
+
+## **8. Initial Operating Locations** 
 
 The system initially supports the following IT support stations: 
 
-# **6.1 Head Office** 
+### **8.1 Head Office** 
 
 The Head Office is one of the initial stations supported by the IT department. 
 
-# **6.2 Babylove - Tesano** 
+### **8.2 Babylove - Tesano** 
 
 Babylove - Tesano is the second initial IT support station. 
 
 The system must be designed so that additional stations can be added later without requiring changes to the application's core business logic. 
 
-# **7. Station-Based Support Model** 
+## **9. Station-Based Support Model** 
 
 IT support is organised around stations. 
 
@@ -150,11 +208,11 @@ Initially:
 
 The system must support the possibility that an IT agent may eventually be assigned to more than one station. 
 
-# **8. Users of the System** 
+## **10. Users of the System** 
 
 The system has three primary application roles: 
 
-# **8.1 User** 
+### **10.1 User** 
 
 A user is an employee who reports an IT problem. 
 
@@ -178,19 +236,17 @@ Users can:
 
 - Respond to support requests. 
 
-- Receive resolution feedback requests. 
-
-- Submit positive or negative feedback. 
+- Receive resolution feedback requests. Submit positive or negative feedback. 
 
 Users cannot access private internal communication between IT agents. 
 
-# **8.2 Agent** 
+### **10.2 Agent** 
 
-An agent is an IT support employee responsible for handling tickets. Agents can: 
+An agent is an IT support employee responsible for handling tickets. 
 
-- View tickets within their authorised station scope. 
+Agents can: 
 
-- Claim tickets. 
+- View tickets within their authorised station scope. Claim tickets. 
 
 - Accept responsibility for tickets. 
 
@@ -200,9 +256,7 @@ An agent is an IT support employee responsible for handling tickets. Agents can:
 
 - Communicate with users. 
 
-- Add internal notes/messages visible only to authorised IT personnel. 
-
-- Use predefined response notices. 
+- Add internal notes/messages visible only to authorised IT personnel. Use predefined response notices. 
 
 - Change ticket status. 
 
@@ -214,7 +268,7 @@ An agent is an IT support employee responsible for handling tickets. Agents can:
 
 Agent access is controlled by station assignment and role permissions. 
 
-# **8.3 Administrator** 
+### **10.3 Administrator** 
 
 An administrator manages the ticketing system and its configuration. 
 
@@ -244,11 +298,11 @@ Administrators can:
 
 Administrative permissions are separate from user priority levels. 
 
-# **9. User Priority Model** 
+## **11. User Priority Model** 
 
 Users are assigned one of three priority levels: 
 
-|**Priori**|**ty User Group**|**General Handling**|
+|**Priority**|**User Group**|**General Handling**|
 |---|---|---|
 |P1|CEOs / Executives|Immediate handling; bypasses normal queue|
 |P2|Managers /<br>Consultants|Queue-based handling with 10-minute unattended<br>escalation|
@@ -262,61 +316,44 @@ Users should not manually select their own priority when creating a ticket.
 
 The backend must determine the ticket priority from the authenticated user's configured priority level. 
 
-# **10. IT Support Workflow** 
+## **12. IT Support Workflow** 
 
 The intended business workflow is: 
 
-Employee reports problem 
-
-↓ 
-
-Ticket is created 
-
-↓ 
-
-Station is identified 
-
-↓ 
-
-Priority is determined 
-
-↓ 
-
-Ticket enters appropriate handling path 
-
-↓ 
-
-IT agent claims/accepts responsibility 
-
-↓ 
-
-Agent communicates with user 
-
-↓ 
-
-Agent investigates and resolves problem 
-
-↓ 
-
-Ticket is marked resolved 
-
-↓ 
-
-User receives feedback request 
-
-↓ 
-
-Positive feedback → Ticket closed 
-
-Negative feedback → Ticket reopened 
+```
+Employee reports problem
+       ↓
+Ticket is created
+       ↓
+Station is identified
+       ↓
+Priority is determined
+       ↓
+Ticket enters appropriate handling path
+       ↓
+IT agent claims/accepts responsibility
+       ↓
+Agent communicates with user
+       ↓
+Agent investigates and resolves problem
+       ↓
+Ticket is marked resolved
+       ↓
+User receives feedback request
+       ↓
+Positive feedback → Ticket closed
+Negative feedback → Ticket reopened
+```
 
 P1 tickets follow the same overall lifecycle but bypass the normal P2/P3 queue. 
 
 Detailed ticket states and transitions are defined in: 
 
-05-ticket-workflow.md 
+```
+05-ticket-workflow.md
+```
 
-# **11. Queue and Priority Context** 
+## **13. Queue and Priority Context** 
 
 The system must provide a station-specific queue for tickets that are waiting for IT support. 
 
@@ -344,11 +381,13 @@ The queue is dynamic rather than a permanently stored position.
 
 Detailed queue rules are defined in: 
 
-06-queue-and-priority-system.md 
+```
+06-queue-and-priority-system.md
+```
 
-# **12. Unattended Ticket Context** 
+## **14. Unattended Ticket Context** 
 
-The organisation requires escalation when tickets remain unattended. 
+The system must provide escalation when tickets remain unattended. 
 
 For this system, an **unattended ticket** is a ticket that is eligible for agent handling but has not yet been claimed, accepted, or assigned to an agent. 
 
@@ -364,11 +403,11 @@ Once an agent claims or is assigned responsibility for a ticket, unattended esca
 
 This distinction allows the system to separate response/attention time from the total time required to resolve a problem. 
 
-# **13. Communication Context** 
+## **15. Communication Context** 
 
 The system must support two distinct forms of communication. 
 
-# **13.1 User-Agent Communication** 
+### **15.1 User-Agent Communication** 
 
 This is communication between the employee who reported the ticket and the IT support agent handling it. 
 
@@ -386,7 +425,7 @@ Messages in this channel may include:
 
 This communication is part of the ticket record. 
 
-# **13.2 Internal Agent Communication** 
+### **15.2 Internal Agent Communication** 
 
 IT agents must also be able to communicate privately about tickets. 
 
@@ -406,7 +445,7 @@ These messages must remain private to authorised IT personnel and must never be 
 
 The application must therefore maintain a clear distinction between user-visible messages and internal messages. 
 
-# **14. Predefined Agent Notices** 
+## **16. Predefined Agent Notices** 
 
 Agents may need to send common operational messages quickly. 
 
@@ -414,11 +453,11 @@ The initial predefined notices include:
 
 - **“I am coming”** 
 
-- **“Please bring your PC”** 
+#### **“Please bring your PC”** 
 
 These notices should be manageable through system configuration so that administrators can add, modify, deactivate, or maintain additional templates without changing application code. 
 
-# **15. Ticket Resolution and Feedback** 
+## **17. Ticket Resolution and Feedback** 
 
 When an agent resolves a ticket, the system sends the user a feedback request. 
 
@@ -426,11 +465,11 @@ The feedback process allows the user to indicate whether the problem was satisfa
 
 The initial outcomes are: 
 
-# **Positive Feedback** 
+### **Positive Feedback** 
 
 A positive response results in the ticket being closed. 
 
-# **Negative Feedback** 
+### **Negative Feedback** 
 
 A negative response results in the ticket being reopened for further support. 
 
@@ -444,13 +483,11 @@ The feedback link:
 
 - If resolution occurs after 5:00 PM GMT, the feedback deadline moves to 5:00 PM GMT on the next applicable working day. 
 
-- Becomes immediately invalid after successful submission. 
-
-- Cannot be reused after successful submission. 
+- Becomes immediately invalid after successful submission. Cannot be reused after successful submission. 
 
 The initial working-day definition is Monday to Friday, with the ability to support configurable holidays/non-working days later. 
 
-# **16. Consultant Accounts** 
+## **18. Consultant Accounts** 
 
 Consultants may receive temporary system accounts. 
 
@@ -466,31 +503,29 @@ When the expiration date is reached:
 
 Account expiration must therefore affect current access without destroying historical records. 
 
-# **17. Problem Classification** 
+## **19. Problem Classification** 
 
 When creating a ticket, the user selects the relevant problem type and provides a brief description. 
 
 The initial problem catalogue is: 
 
-# **Support** 
+### **Support** 
 
 - SAP 
 
-- Microsoft Excel 
-
-- Microsoft Word 
+- Microsoft Excel Microsoft Word 
 
 - HR System 
 
 - Other Support 
 
-# **Laptop** 
+### **Laptop** 
 
 - Faulty Laptop (Software) 
 
 - Faulty Laptop (Hardware) 
 
-# **Other Categories** 
+### **Other Categories** 
 
 - Laptop Accessories 
 
@@ -504,39 +539,43 @@ Problem categories and problem types must be database/configuration-driven.
 
 Administrators should be able to: 
 
-- Add problem types. 
+Add problem types. 
 
-- Modify problem types. 
+Modify problem types. 
 
-- Deactivate problem types. 
+Deactivate problem types. 
 
-- Organise problem types into categories. 
+Organise problem types into categories. 
 
-- Control their display order. 
+Control their display order. 
 
-The application should not require source-code changes for normal problem-catalogue administration. 
+The application should not require source-code changes for normal problemcatalogue administration. 
 
-# **18. Ticket Identification** 
+## **20. Ticket Identification** 
 
 Each ticket should have: 
 
 1. A system-generated database identifier, preferably a UUID. 
 
-# 2. A human-readable ticket number. 
+2. A human-readable ticket number. 
 
 The recommended ticket-number format is: 
 
-IT-YYYY-XXXXXX 
+```
+IT-YYYY-XXXXXX
+```
 
 Example: 
 
-IT-2026-000125 
+```
+IT-2026-000125
+```
 
 The human-readable ticket number is intended for communication, searching, reporting, and user reference. 
 
 The database identifier remains the technical primary key. 
 
-# **19. Record Keeping and Accountability** 
+## **21. Record Keeping and Accountability** 
 
 Every ticket should maintain a history of relevant actions. 
 
@@ -580,7 +619,7 @@ Audit information is important for operational accountability, reporting, troubl
 
 Tickets should not normally be physically deleted during ordinary operations. 
 
-# **20. Reporting and Management Context** 
+## **22. Reporting and Management Context** 
 
 The system should provide management visibility into IT support activity. 
 
@@ -616,7 +655,7 @@ Reporting must respect the user's authorisation scope.
 
 Administrators may have system-wide reporting access, while agents should only receive reports or operational information permitted by their role and station scope. 
 
-# **21. Security and Confidentiality Context** 
+## **23. Security and Confidentiality Context** 
 
 The system will contain internal organisational information and therefore requires appropriate access control. 
 
@@ -624,31 +663,27 @@ Important business-security requirements include:
 
 - Users should only access their own tickets. 
 
-- Agents should only access tickets within their authorised station scope. 
-
-- Administrators may access system-wide information according to their privileges. 
+- Agents should only access tickets within their authorised station scope. Administrators may access system-wide information according to their privileges. 
 
 - Internal agent communication must remain private. 
 
 - Priority must not be controlled by the client. 
 
-- Ticket ownership and status changes must be validated by the backend. 
-
-- WebSocket access must follow the same authorisation rules as API access. 
-
-- Attachments must follow the visibility rules of the associated ticket/message. 
-
-- Sensitive actions must be auditable. 
+- Ticket ownership and status changes must be validated by the backend. WebSocket access must follow the same authorisation rules as API access. Attachments must follow the visibility rules of the associated ticket/message. Sensitive actions must be auditable. 
 
 - Inactive and expired accounts must not retain active access. 
 
-- The system must protect against unauthorised access to tickets and organisational information. 
+- The system must protect against unauthorised access to tickets and 
+
+- organisational information. 
 
 Detailed security requirements are defined in: 
 
-10-security.md 
+```
+10-security.md
+```
 
-# **22. Data and Infrastructure Context** 
+## **24. Data and Infrastructure Context** 
 
 The application will use a central server-side architecture. 
 
@@ -656,31 +691,145 @@ The authoritative application database will be PostgreSQL.
 
 The system should not use separate local databases on individual employee computers. 
 
-The main data and infrastructure components are: 
+The core application services are: 
 
-**Component Business/Technical Purpose** 
-
-PostgreSQL Authoritative application data 
-
-|**Component**|**Business/Technical Purpose**|
+|**Component**|**Purpose**|
 |---|---|
-|Redis|Queue/cache and task coordination|
+|PostgreSQL|Authoritative application data|
+|Redis|Task coordination and appropriate caching|
 |Celery|Background jobs and scheduled processing|
+
+
+
 |MinIO|Ticket attachment storage|
+|---|---|
 |Django|Core application and business logic|
-|Django REST Framew|ork API|
+|Django REST Framework|API|
 |Django Channels|Real-time communication|
 |Next.js|User interface|
-|Nginx|Reverse proxy and web entry point|
+|Production web server/reverse proxy|Environment-dependent web entry point|
 |SMTP|Organisational email delivery|
 
 
 
-# **23. Backup and Continuity Context** 
+The exact production arrangement of these services is a deployment concern and must be determined according to the capabilities of the company's dedicated server. The application must not assume that every component is provided directly by cPanel. 
+
+## **25. Development and Production Environment Separation** 
+
+The development environment and production environment should be treated as separate concerns. 
+
+### **Development** 
+
+The project should provide a reproducible local development environment. 
+
+Docker Compose is the preferred mechanism for assembling the development services, including: Django. Next.js. PostgreSQL. Redis. Celery. MinIO. 
+
+This allows development to proceed without depending on the company's production server. 
+
+### **Production** 
+
+Production deployment will target the company's dedicated server environment. 
+
+The production deployment method may use Docker Compose or direct service installation depending on: 
+
+- Server operating system. 
+
+- cPanel configuration. 
+
+- Available resources. 
+
+- Administrative permissions. 
+
+- Security policy. 
+
+- Supported application services. 
+
+- Web-server configuration. 
+
+- Company IT policy. 
+
+No production-specific implementation decision should be treated as final until the deployment environment is confirmed. 
+
+## **26. Hosting and Deployment Portability** 
+
+The ticketing application must be designed to remain portable across supported server environments. 
+
+The application must not: 
+
+- Depend on cPanel-specific business logic. 
+
+- Depend on a specific operating system. 
+
+- Assume a particular web server is always available. 
+
+- Store application state in the hosting control panel. 
+
+- Depend on local developer-machine configuration. 
+
+- Require modification of the existing HRMS application. 
+
+Configuration such as: 
+
+- Database connection. 
+
+- Redis connection. 
+
+- Storage configuration. 
+
+- SMTP settings. 
+
+- Allowed hosts. 
+
+- Application URLs. Secret keys. 
+
+Authentication settings. 
+
+must be supplied through environment-specific configuration rather than hard-coded into the application. 
+
+This separation allows the same application codebase to move between development, testing, staging, and production environments. 
+
+## **27. Future Active Directory Integration** 
+
+The organisation's existing Windows Active Directory environment should be considered a future integration point. 
+
+The system should be structured so that authentication can eventually support: 
+
+```
+Employee
+```
+
+```
+   ↓
+Ticketing System
+   ↓
+Active Directory / LDAP
+   ↓
+Existing organisational account
+```
+
+Potential future integration may include: 
+
+AD/LDAP authentication. 
+
+- Existing employee identity information. 
+
+- Organisational email addresses. 
+
+- Group-based access mapping. 
+
+- Automatic account provisioning or synchronisation. 
+
+- Account deactivation based on organisational identity state. 
+
+These capabilities are **not part of the initial MVP unless explicitly approved** . 
+
+The MVP should therefore use an authentication mechanism that can later be extended or replaced without requiring changes to the ticketing domain model and business logic. 
+
+## **28. Backup and Continuity Context** 
 
 Ticket records represent organisational support history and should be protected against data loss. 
 
-The system therefore requires: 
+#### The system therefore requires: 
 
 - Automated database backups. 
 
@@ -696,49 +845,61 @@ The system therefore requires:
 
 The objective is not simply to create backups but to ensure that the organisation can recover the system and its data when required. 
 
-Detailed deployment, backup, and recovery requirements are defined in: 12-deployment.md 
+Detailed deployment, backup, and recovery requirements are defined in: 
 
-# **24. Project Goals** 
+```
+12-deployment.md
+```
+
+## **29. Project Goals** 
 
 The system should achieve the following business goals: 
 
-# **Goal 1 — Centralise IT Support** 
+### **Goal 1 — Centralise IT Support** 
 
 Provide one central location for employees and IT personnel to manage support requests. 
 
-# **Goal 2 — Improve Ticket Visibility** 
+### **Goal 2 — Improve Ticket Visibility** 
 
 Allow users and IT personnel to understand the current state and ownership of support requests. 
 
-# **Goal 3 — Improve Response Management** 
+### **Goal 3 — Improve Response Management** 
 
 Use priority levels, station-specific queues, and unattended-ticket escalation to structure response handling. 
 
-# **Goal 4 — Improve Accountability** 
+### **Goal 4 — Improve Accountability** 
 
 Maintain an auditable history of important ticket activities and ownership changes. 
 
-# **Goal 5 — Improve Communication** 
+### **Goal 5 — Improve Communication** 
 
 Provide a structured communication channel between users and IT personnel while maintaining private internal IT communication. 
 
-# **Goal 6 — Improve Resolution Follow-up** 
+### **Goal 6 — Improve Resolution Follow-up** 
 
 Collect feedback after resolution and automatically reopen tickets when users indicate that further assistance is required. 
 
-# **Goal 7 — Support Multiple Stations** 
+### **Goal 7 — Support Multiple Stations** 
 
 Provide station-based routing and access control while allowing the organisation to add more stations as it grows. 
 
-# **Goal 8 — Support Management Decisions** 
+### **Goal 8 — Support Management Decisions** 
 
 Provide reliable reporting on IT support activity, workload, response, resolution, and feedback. 
 
-# **Goal 9 — Provide a Maintainable Foundation** 
+### **Goal 9 — Provide a Maintainable Foundation** 
 
 Build the system so that common organisational changes—such as adding stations, users, problem types, or response templates—can be managed through configuration rather than unnecessary code changes. 
 
-# **25. Initial Scope** 
+### **Goal 10 — Support Existing Infrastructure** 
+
+Develop the system so that it can ultimately operate within the organisation's existing dedicated-server environment without creating unnecessary dependencies on the existing HRMS application or hosting control panel. 
+
+### **Goal 11 — Prepare for Organisational Authentication** 
+
+Maintain an architecture that can support future integration with the organisation's Active Directory/LDAP environment. 
+
+## **30. Initial Scope** 
 
 The initial system is focused on internal IT support ticket management. 
 
@@ -758,9 +919,7 @@ The MVP includes:
 
 - Ticket queues. 
 
-- Ticket claiming and assignment. 
-
-- Ticket transfers. 
+- Ticket claiming and assignment. Ticket transfers. 
 
 - User-agent communication. 
 
@@ -800,7 +959,9 @@ The MVP includes:
 
 - Backup and recovery capability. 
 
-# **26. Future Expansion** 
+The MVP does not require Active Directory/LDAP integration unless that requirement is explicitly approved and added to scope. 
+
+## **31. Future Expansion** 
 
 The system should be designed so that additional capabilities can be introduced later without requiring a complete rewrite. 
 
@@ -818,7 +979,7 @@ Potential future features include:
 
 - AI-assisted support. 
 
-- Mobile application. 
+Mobile application. 
 
 - Enterprise system integrations. 
 
@@ -826,41 +987,55 @@ Potential future features include:
 
 - Configurable organisational holidays and non-working days. 
 
+- Additional authentication providers. 
+
 These features are outside the initial MVP unless they are explicitly added through the project's change process. 
 
-# **27. Key Business Constraints** 
+## **32. Key Business Constraints** 
 
 The system must operate within the following constraints: 
 
 1. It is primarily an internal organisational application. 
 
-2. The initial deployment is intended for the intranet. 
+2. The initial deployment is intended for the company's internal network. 
 
-3. The system must support multiple stations. 
+3. The intended production environment is the company's existing dedicated server. 
 
-4. Ticket visibility must be controlled by station and role. 
+4. The company currently uses cPanel within its hosting environment, but the application's business logic must not depend on cPanel. 
 
-5. P1, P2, and P3 handling must follow defined business rules. 
+5. The exact production operating system and supported application services are not yet confirmed. 
 
-6. Users must not be able to manipulate their own priority. 
+6. The application must therefore remain deployment-portable. 
 
-7. Internal agent communication must remain confidential. 
+7. The system must support multiple stations. 
 
-8. Ticket history must be retained. 
+8. Ticket visibility must be controlled by station and role. 
 
-9. Critical state-changing operations must be safe against concurrent actions. 
+9. P1, P2, and P3 handling must follow defined business rules. 
 
-- 10.Background escalation and notification processes must not create duplicate events. 
+10. Users must not be able to manipulate their own priority. 
 
-- 11.Administrative configuration should be possible without modifying source code where the requirement is configuration-driven. 
+11. Internal agent communication must remain confidential. 
 
-- 12.Security controls must be enforced on the backend. 
+12. Ticket history must be retained. 
 
-- 13.The system must be deployable using the approved technology stack. 
+13. Critical state-changing operations must be safe against concurrent actions. 
 
-- 14.The application must remain maintainable as stations, agents, and ticket volume increase. 
+14. Background escalation and notification processes must not create duplicate events. 
 
-# **28. Business Success Criteria** 
+15. Administrative configuration should be possible without modifying source code where the requirement is configuration-driven. 
+
+16. Security controls must be enforced on the backend. 
+
+17. The system must remain compatible with future Active Directory/LDAP integration. 
+
+18. The application must be deployable independently of the existing HRMS application's technology stack. 
+
+19. Production infrastructure decisions must not be hard-coded into application business logic. 
+
+20. The system must remain maintainable as stations, agents, and ticket volume increase. 
+
+## **33. Business Success Criteria** 
 
 The system will be considered successful when the IT department can use it as the central mechanism for internal IT support and can reliably: 
 
@@ -890,75 +1065,59 @@ The system will be considered successful when the IT department can use it as th
 
 - Maintain an accurate history of ticket activity. 
 
-- Manage system configuration through authorised administrative functions. 
-
-- Produce useful operational reports. 
+- Manage system configuration through authorised administrative functions. Produce useful operational reports. 
 
 - Protect organisational data through appropriate security, backup, and accesscontrol mechanisms. 
 
-# **29. Relationship to Other Documents** 
+- Operate within the company's available server infrastructure once the production environment has been configured. 
+
+- Remain capable of future integration with the company's Active Directory environment. 
+
+## **34. Relationship to Other Documents** 
 
 This document establishes the business context and should be read together with the remaining project documentation. 
 
 The documentation hierarchy is: 
 
-01 Business Context 
+```
+01 Business Context
+```
 
-↓ 
+```
+       ↓
+```
 
-02 Product Requirements 
-
-↓ 
-
-03 Business Rules 
-
-↓ 
-
-# 04 User Roles & Permissions 
-
-↓ 
-
-05 Ticket Workflow 
-
-↓ 
-
-# 06 Queue & Priority System 
-
-↓ 
-
-07 Database Design 
-
-↓ 
-
-08 System Architecture 
-
-↓ 
-
-09 API Specification 
-
-↓ 
-
-10 Security 
-
-↓ 
-
-11 Notification & SLA 
-
-↓ 
-
-12 Deployment 
-
-↓ 
-
-13 Development Roadmap 
-
-↓ 
-
-14 Claude Code Instructions 
+```
+02 Product Requirements
+       ↓
+03 Business Rules
+       ↓
+04 User Roles & Permissions
+       ↓
+05 Ticket Workflow
+       ↓
+06 Queue & Priority System
+       ↓
+07 Database Design
+       ↓
+08 System Architecture
+       ↓
+09 API Specification
+       ↓
+10 Security
+       ↓
+11 Notification & SLA
+       ↓
+12 Deployment
+       ↓
+13 Development Roadmap
+       ↓
+14 Claude Code Instructions
+```
 
 Where a later document defines more detailed behaviour, that document provides the detailed specification for its subject area while remaining consistent with the business context established here. 
 
-# **30. Implementation Principle** 
+## **35. Implementation Principle** 
 
 The system should solve the organisation's actual IT support workflow rather than introduce unnecessary complexity. 
 
@@ -970,15 +1129,81 @@ The implementation must therefore:
 
 - Enforce business rules on the backend. 
 
-- Keep current state separate from historical records where appropriate. 
+- Keep current state separate from historical records where appropriate. Maintain clear separation between user-visible and internal communication. 
 
-- Maintain clear separation between user-visible and internal communication. 
+- Use configuration for organisational data that is expected to change. Avoid unnecessary features outside the approved scope. 
 
-- Use configuration for organisational data that is expected to change. 
+- Preserve maintainability and security as the system develops. Remain portable across supported deployment environments. 
 
-- Avoid unnecessary features outside the approved scope. 
+- Keep infrastructure-specific configuration outside application business logic. Preserve a clear path for future Active Directory/LDAP integration. 
 
-- Preserve maintainability and security as the system develops. 
+Any ambiguity or conflict discovered during implementation should be identified and resolved against the project documentation before introducing new business behaviour. 
 
-Any ambiguity or conflict discovered during implementation should be identified and resolved against the project documentation before introducing new business behaviour. The project must not silently invent business rules that have not been approved. 
+The project must not silently invent business rules that have not been approved. 
+
+## **36. Current Deployment Decision** 
+
+For the purposes of development, the following decisions are authoritative: 
+
+### **Application Architecture** 
+
+The application will use: 
+
+```
+Next.js
+   ↓
+Django / Django REST Framework
+   ↓
+PostgreSQL
+   ↓
+Redis + Celery
+   ↓
+Django Channels
+   ↓
+MinIO
+```
+
+### **Development Environment** 
+
+Docker Compose is the preferred method for creating a reproducible development environment. 
+
+### **Production Environment** 
+
+The intended production environment is the company's existing dedicated server. 
+
+The company uses cPanel, but the exact production server configuration has not yet been formally confirmed. 
+
+Therefore: 
+
+- cPanel is treated as an **existing hosting environment** , not an application dependency. 
+
+- Ubuntu is **not a mandatory production requirement** . 
+
+- A specific production web server is **not hard-coded as an application requirement** . 
+
+- Docker is **preferred for reproducible development** but is not mandatory for production until the server environment is confirmed. 
+
+- PostgreSQL, Redis, Celery, Channels, and MinIO remain part of the application's architecture, but their exact production deployment method may be adapted to the available infrastructure. 
+
+- The application must remain deployable independently of the existing HRMS application. 
+
+Future Active Directory/LDAP integration must remain technically feasible. 
+
+The production deployment document must therefore describe the deployment as **environment-dependent** rather than assuming a specific operating system or hosting implementation. 
+
+## **37. Final Business Context Statement** 
+
+The IT Ticketing System is an internal organisational support platform intended to centralise the reporting, routing, prioritisation, communication, assignment, resolution, feedback, and reporting of IT problems. 
+
+The system will initially support Head Office and Babylove - Tesano and must be capable of expanding to additional stations. 
+
+It will be developed using a modern web application architecture based on Next.js, Django, PostgreSQL, Redis, Celery, Django Channels, and MinIO. 
+
+The application is intended for deployment within the company's existing dedicatedserver infrastructure, which currently uses cPanel. Because the exact production server configuration has not been formally confirmed, the application must remain portable and must not make business logic dependent on cPanel, a particular operating system, or a specific web server. 
+
+The organisation's existing Windows Active Directory environment is recognised as a future integration point. Active Directory/LDAP authentication is not part of the initial MVP unless explicitly added to scope, but the system must be designed so that future integration can be implemented without restructuring the core ticketing system. 
+
+The business requirements, rules, workflow, security model, architecture, API, deployment model, and implementation instructions defined in the subsequent project documents must remain consistent with this context. 
+
+Consolidate repeated deployment sections 
 
