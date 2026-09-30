@@ -25,8 +25,6 @@ Implementation should follow:
 
 `01 → 02 → 03 → ... → 14`
 
-`14-claude-code-instructions.md` provides the operational instructions for Claude Code.
-
 ## Development Status
 
 Project documentation completed.
