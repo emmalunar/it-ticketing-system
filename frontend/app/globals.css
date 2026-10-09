@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f4f7f1;
-  --foreground: #183129;
+  --background: #f7f8f2;
+  --foreground: #20291f;
 }
 
 @theme inline {
@@ -19,4 +19,6 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), sans-serif;
 }
-button, select { font: inherit; }
+button, select, input { font: inherit; }
+button:not(:disabled) { cursor: pointer; }
+::selection { background: #e4f3a9; color: #26321b; }

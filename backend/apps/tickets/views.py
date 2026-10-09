@@ -14,9 +14,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
-from apps.stations.models import AgentStation
+from apps.stations.models import AgentStation, Station
 from apps.tickets.queue import queue_position, queue_summary, queue_tickets
-from apps.tickets.models import Attachment, Feedback, FeedbackToken, Ticket, TicketMessage
+from apps.tickets.models import Attachment, Feedback, FeedbackToken, ProblemType, Ticket, TicketMessage
 from apps.tickets.serializers import (
     AttachmentSerializer,
     ClaimSerializer,
@@ -214,6 +214,32 @@ class QueueView(APIView):
                 }
                 for ticket in tickets
             ]
+        })
+
+
+class TicketOptionsView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        stations = request.user.agent_stations.filter(is_active=True).select_related("station")
+        if request.user.role in (User.Role.USER, User.Role.ADMIN):
+            station_list = list(
+                Station.objects.filter(is_active=True)
+                .order_by("name")
+                .values("id", "name", "code")
+            )
+        else:
+            station_list = [
+                {"id": item.station_id, "name": item.station.name, "code": item.station.code}
+                for item in stations.order_by("station__name")
+            ]
+        problem_types = ProblemType.objects.filter(is_active=True, category__is_active=True).select_related("category").order_by("category__sort_order", "sort_order", "name")
+        return Response({
+            "stations": station_list,
+            "problem_types": [
+                {"id": item.id, "name": item.name, "category": item.category.name}
+                for item in problem_types
+            ],
         })
 
 
