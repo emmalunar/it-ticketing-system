@@ -39,6 +39,45 @@ class TestTicketApi:
         assert response.data["status"] == Ticket.Status.QUEUED
         assert Ticket.objects.get().sla.escalation_due_at is not None
 
+    def test_requester_ticket_list_only_contains_their_own_tickets(self):
+        own_ticket = Ticket.objects.create(
+            user=self.user,
+            station=self.station,
+            problem_type=self.problem_type,
+            description="Cannot access HR system",
+        )
+        other_user = User.objects.create_user(username="other-requester", password="secretpass")
+        Ticket.objects.create(
+            user=other_user,
+            station=self.station,
+            problem_type=self.problem_type,
+            description="Another person's issue",
+        )
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get("/api/v1/tickets/")
+
+        assert response.status_code == 200
+        assert [item["id"] for item in response.data] == [str(own_ticket.pk)]
+
+    def test_requester_can_load_ticket_form_options(self):
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get("/api/v1/tickets/options/")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["stations"] == [
+            {"id": str(self.station.pk), "name": self.station.name, "code": self.station.code}
+        ]
+        assert data["problem_types"] == [
+            {
+                "id": str(self.problem_type.pk),
+                "name": self.problem_type.name,
+                "category": self.problem_type.category.name,
+            }
+        ]
+
     def test_agent_can_claim_ticket_at_assigned_station(self):
         ticket = Ticket.objects.create(
             user=self.user,

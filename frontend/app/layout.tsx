@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "IT Ticketing System",
-  description: "Internal IT support operations foundation",
+  title: "Service Desk | Operations",
+  description: "A clear view of your team's IT support operations.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

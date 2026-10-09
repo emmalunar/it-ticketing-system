@@ -5,6 +5,9 @@ from apps.tickets.models import Attachment, ProblemType, Ticket, TicketMessage
 
 
 class TicketSerializer(serializers.ModelSerializer):
+    station_name = serializers.CharField(source="station.name", read_only=True)
+    problem_type_name = serializers.CharField(source="problem_type.name", read_only=True)
+
     class Meta:
         model = Ticket
         fields = (
@@ -12,7 +15,9 @@ class TicketSerializer(serializers.ModelSerializer):
             "ticket_number",
             "user",
             "station",
+            "station_name",
             "problem_type",
+            "problem_type_name",
             "description",
             "status",
             "priority",
