@@ -7,6 +7,8 @@ from apps.tickets.models import Attachment, ProblemType, Ticket, TicketMessage
 class TicketSerializer(serializers.ModelSerializer):
     station_name = serializers.CharField(source="station.name", read_only=True)
     problem_type_name = serializers.CharField(source="problem_type.name", read_only=True)
+    requester_name = serializers.SerializerMethodField()
+    requester_username = serializers.CharField(source="user.username", read_only=True)
 
     class Meta:
         model = Ticket
@@ -14,6 +16,8 @@ class TicketSerializer(serializers.ModelSerializer):
             "id",
             "ticket_number",
             "user",
+            "requester_name",
+            "requester_username",
             "station",
             "station_name",
             "problem_type",
@@ -44,6 +48,9 @@ class TicketSerializer(serializers.ModelSerializer):
         if not station.is_active:
             raise serializers.ValidationError("The selected station is inactive.")
         return station
+
+    def get_requester_name(self, ticket):
+        return ticket.user.get_full_name() or ticket.user.username
 
     def validate_problem_type(self, problem_type):
         if not problem_type.is_active:
@@ -79,7 +86,7 @@ class AttachmentSerializer(serializers.ModelSerializer):
 
 
 class TransferSerializer(serializers.Serializer):
-    station = serializers.PrimaryKeyRelatedField(queryset=Station.objects.all())
+    station = serializers.PrimaryKeyRelatedField(queryset=Station.objects.filter(is_active=True))
     agent = serializers.UUIDField(required=False, allow_null=True)
     reason = serializers.CharField(required=False, allow_blank=True)
 

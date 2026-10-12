@@ -106,8 +106,7 @@ class Ticket(models.Model):
                 notify_p1_ticket(str(self.pk))
 
     def assign_to(self, agent, assigned_by=None, reason=""):
-        if self.assignee_id:
-            TicketAssignment.objects.filter(ticket=self, ended_at__isnull=True).update(ended_at=timezone.now())
+        TicketAssignment.objects.filter(ticket=self, ended_at__isnull=True).update(ended_at=timezone.now())
         assignment = TicketAssignment.objects.create(
             ticket=self,
             agent=agent,
@@ -135,6 +134,8 @@ class Ticket(models.Model):
         return assignment
 
     def transfer_to(self, station, transferred_by, agent=None, reason=""):
+        now = timezone.now()
+        TicketAssignment.objects.filter(ticket=self, ended_at__isnull=True).update(ended_at=now)
         transfer = TicketTransfer.objects.create(
             ticket=self,
             from_station=self.station,
@@ -146,17 +147,50 @@ class Ticket(models.Model):
         )
         self.station = station
         self.assignee = agent
-        self.save(update_fields=("station", "assignee", "updated_at"))
+        self.status = self.Status.IN_PROGRESS if agent else self.Status.QUEUED
+        self.save(update_fields=("station", "assignee", "status", "updated_at"))
         if agent:
-            TicketSLA.objects.filter(ticket=self, stopped_at__isnull=True).update(stopped_at=timezone.now())
-            Notification.objects.create(
-                recipient=agent,
+            TicketAssignment.objects.create(
                 ticket=self,
-                event_type=Notification.EventType.TICKET_TRANSFERRED,
-                title="Ticket transferred",
-                message=f"Ticket {self.ticket_number} has been transferred to you.",
-                dedupe_key=f"transfer:{transfer.id}",
+                agent=agent,
+                assigned_by=transferred_by,
+                reason=reason,
             )
+            TicketSLA.objects.filter(ticket=self).update(stopped_at=now)
+            recipients = [agent.pk]
+        else:
+            escalation_minutes = {
+                self.Priority.P2: 10,
+                self.Priority.P3: 60,
+            }.get(self.priority)
+            TicketSLA.objects.filter(ticket=self).update(
+                escalation_due_at=now + timedelta(minutes=escalation_minutes)
+                if escalation_minutes is not None
+                else None,
+                escalated_at=None,
+                stopped_at=None,
+            )
+            from apps.stations.models import AgentStation
+
+            recipients = AgentStation.objects.filter(
+                station=station,
+                is_active=True,
+                agent__is_active=True,
+            ).values_list("agent_id", flat=True)
+        Notification.objects.bulk_create(
+            [
+                Notification(
+                    recipient_id=recipient_id,
+                    ticket=self,
+                    event_type=Notification.EventType.TICKET_TRANSFERRED,
+                    title="Ticket transferred",
+                    message=f"Ticket {self.ticket_number} has been transferred to {station.name}.",
+                    dedupe_key=f"transfer:{transfer.id}:{recipient_id}",
+                )
+                for recipient_id in recipients
+            ],
+            ignore_conflicts=True,
+        )
         AuditLog.objects.create(
             ticket=self,
             actor=transferred_by,

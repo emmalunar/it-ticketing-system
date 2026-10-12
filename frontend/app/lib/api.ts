@@ -29,8 +29,28 @@ export type UserTicket = {
   status: string;
   priority: "P1" | "P2" | "P3";
   assignee: string | null;
+  requester_name?: string;
+  requester_username?: string;
   created_at: string;
   updated_at: string;
+};
+
+export type ManagedUser = ApiUser & {
+  email: string;
+  is_active: boolean;
+  created_at: string;
+};
+
+export type AdminUserInput = {
+  username?: string;
+  password?: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  role?: ApiUser["role"];
+  priority_level?: ApiUser["priority_level"];
+  is_active?: boolean;
+  station_ids?: string[];
 };
 
 export type TicketOptions = {
@@ -43,19 +63,26 @@ type SummaryResponse = { data: { p1_count: number; p2_count: number; p3_count: n
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
-  headers.set("Content-Type", "application/json");
+  if (!(init?.body instanceof FormData)) headers.set("Content-Type", "application/json");
   if (init?.method && init.method.toUpperCase() !== "GET" && typeof document !== "undefined") {
     const csrfCookie = document.cookie.split("; ").find((cookie) => cookie.startsWith("csrftoken="));
     if (csrfCookie) headers.set("X-CSRFToken", csrfCookie.slice("csrftoken=".length));
   }
   const response = await fetch(path, {
     ...init,
+    cache: "no-store",
     credentials: "include",
     headers,
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(body?.detail ?? body?.error?.message ?? `Request failed (${response.status})`);
+    const message = body?.detail ?? body?.error?.message;
+    const fieldErrors = body && typeof body === "object"
+      ? Object.entries(body).map(([field, errors]) => `${field}: ${Array.isArray(errors) ? errors.join(", ") : String(errors)}`).join("; ")
+      : "";
+    throw new Error(
+      typeof message === "string" ? message : fieldErrors || `Request failed (${response.status})`,
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -104,9 +131,43 @@ export function createTicket(input: { station: string; problem_type: string; des
   });
 }
 
+export function uploadTicketAttachment(ticketId: string, file: File) {
+  const body = new FormData();
+  body.append("file", file);
+  return request(`/api/v1/tickets/${ticketId}/attachments/`, {
+    method: "POST",
+    body,
+  });
+}
+
+export function getAdminUsers() {
+  return request<ManagedUser[]>("/api/v1/admin/users/");
+}
+
+export function saveAdminUser(input: AdminUserInput, userId?: string) {
+  return request<ManagedUser>(userId ? `/api/v1/admin/users/${userId}/` : "/api/v1/admin/users/", {
+    method: userId ? "PATCH" : "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function archiveTicket(ticketId: string) {
+  return request<UserTicket>(`/api/v1/tickets/${ticketId}/archive/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export function claimTicket(ticketId: string) {
   return request(`/api/v1/tickets/${ticketId}/claim/`, {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+export function transferTicket(ticketId: string, input: { station: string; agent?: string | null; reason?: string }) {
+  return request<UserTicket>(`/api/v1/tickets/${ticketId}/transfer/`, {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }

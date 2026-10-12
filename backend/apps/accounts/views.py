@@ -2,11 +2,39 @@ from django.contrib.auth import authenticate, login, logout
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.generics import ListCreateAPIView, RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.serializers import LoginSerializer, UserSerializer
+from apps.accounts.models import User
+from apps.accounts.serializers import AdminUserSerializer, LoginSerializer, UserSerializer
+
+
+class AdminOnlyMixin:
+    permission_classes = (IsAuthenticated,)
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if request.user.role != User.Role.ADMIN:
+            raise PermissionDenied("Only administrators can manage accounts.")
+
+
+class AdminUserListView(AdminOnlyMixin, ListCreateAPIView):
+    serializer_class = AdminUserSerializer
+    queryset = User.objects.prefetch_related("agent_stations__station").order_by("role", "username")
+
+
+class AdminUserDetailView(AdminOnlyMixin, RetrieveUpdateAPIView):
+    serializer_class = AdminUserSerializer
+    queryset = User.objects.prefetch_related("agent_stations__station")
+    http_method_names = ("get", "patch", "head", "options")
+
+    def perform_update(self, serializer):
+        if self.get_object().pk == self.request.user.pk and serializer.validated_data.get("is_active") is False:
+            raise ValidationError({"is_active": "You cannot deactivate your own administrator account."})
+        serializer.save()
 
 
 @method_decorator(ensure_csrf_cookie, name="dispatch")

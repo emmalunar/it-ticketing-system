@@ -76,6 +76,7 @@ class TestTicketCoreModels:
         assert transfer.from_station == source
         assert transfer.to_station == destination
         assert ticket.transfers.count() == 1
+        assert ticket.assignments.filter(agent=agent, ended_at__isnull=True).exists()
         assert ticket.notifications.filter(event_type=Notification.EventType.TICKET_TRANSFERRED).exists()
         assert ticket.audit_logs.filter(action="ticket.transferred").exists()
 

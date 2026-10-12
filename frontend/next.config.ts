@@ -12,7 +12,7 @@ const nextConfig: NextConfig = {
       { source: "/api/v1/queue/", destination: "http://127.0.0.1:8000/api/v1/queue/" },
       { source: "/api/v1/queue/summary", destination: "http://127.0.0.1:8000/api/v1/queue/summary/" },
       { source: "/api/v1/queue/summary/", destination: "http://127.0.0.1:8000/api/v1/queue/summary/" },
-      { source: "/api/:path*", destination: "http://127.0.0.1:8000/api/:path*" },
+      { source: "/api/:path*", destination: "http://127.0.0.1:8000/api/:path*/" },
     ];
   },
 };

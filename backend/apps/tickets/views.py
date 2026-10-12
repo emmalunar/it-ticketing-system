@@ -8,7 +8,7 @@ from django.utils.text import get_valid_filename
 from django.db import transaction
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -57,9 +57,29 @@ class TicketViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save()
 
+    def destroy(self, request, *args, **kwargs):
+        raise MethodNotAllowed(
+            "DELETE",
+            detail="Tickets are retained for audit history. Administrators can archive them by closing the ticket.",
+        )
+
     def _require_agent(self):
         if self.request.user.role not in (User.Role.AGENT, User.Role.ADMIN):
             raise PermissionDenied("Only agents and administrators can perform this action.")
+
+    def _require_admin(self):
+        if self.request.user.role != User.Role.ADMIN:
+            raise PermissionDenied("Only administrators can archive tickets.")
+
+    @action(detail=True, methods=("post",))
+    def archive(self, request, pk=None):
+        self._require_admin()
+        ticket = self.get_object()
+        if ticket.status != Ticket.Status.CLOSED or ticket.closed_at is None:
+            ticket.status = Ticket.Status.CLOSED
+            ticket.closed_at = ticket.closed_at or timezone.now()
+            ticket.save(update_fields=("status", "closed_at", "updated_at"))
+        return Response(TicketSerializer(ticket, context={"request": request}).data)
 
     def _require_station_access(self, station):
         if self.request.user.role == User.Role.ADMIN:
@@ -71,12 +91,16 @@ class TicketViewSet(viewsets.ModelViewSet):
     def claim(self, request, pk=None):
         self._require_agent()
         ticket = self.get_object()
-        self._require_station_access(ticket.station)
-        if ticket.assignee_id and ticket.assignee_id != request.user.id:
-            raise ValidationError({"code": "TICKET_NOT_CLAIMABLE", "message": "This ticket is already assigned."})
         serializer = ClaimSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
+            ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+            self._require_station_access(ticket.station)
+            if ticket.assignee_id or ticket.status not in (Ticket.Status.QUEUED, Ticket.Status.REOPENED):
+                raise ValidationError({
+                    "code": "TICKET_NOT_CLAIMABLE",
+                    "message": "This ticket is already assigned or is not available to claim.",
+                })
             ticket.assign_to(request.user, assigned_by=request.user, reason=serializer.validated_data.get("reason", ""))
         return Response(TicketSerializer(ticket, context={"request": request}).data)
 
@@ -89,21 +113,32 @@ class TicketViewSet(viewsets.ModelViewSet):
     def transfer(self, request, pk=None):
         self._require_agent()
         ticket = self.get_object()
-        self._require_station_access(ticket.station)
-        serializer = TransferSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        station = serializer.validated_data["station"]
-        self._require_station_access(station)
-        agent_id = serializer.validated_data.get("agent")
-        agent = None
-        if agent_id:
-            try:
-                agent = User.objects.get(pk=agent_id, role=User.Role.AGENT, is_active=True)
-            except User.DoesNotExist as exc:
-                raise ValidationError({"agent": "The selected agent is not active or does not exist."}) from exc
-            if not AgentStation.objects.filter(agent=agent, station=station, is_active=True).exists():
-                raise ValidationError({"agent": "The selected agent is not assigned to the receiving station."})
         with transaction.atomic():
+            ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+            self._require_station_access(ticket.station)
+            if ticket.status not in (
+                Ticket.Status.QUEUED,
+                Ticket.Status.IN_PROGRESS,
+                Ticket.Status.WAITING_USER,
+                Ticket.Status.REOPENED,
+            ):
+                raise ValidationError({
+                    "code": "TICKET_NOT_TRANSFERABLE",
+                    "message": "Only active tickets can be transferred.",
+                })
+            serializer = TransferSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            station = serializer.validated_data["station"]
+            self._require_station_access(station)
+            agent_id = serializer.validated_data.get("agent")
+            agent = None
+            if agent_id:
+                try:
+                    agent = User.objects.get(pk=agent_id, role=User.Role.AGENT, is_active=True)
+                except User.DoesNotExist as exc:
+                    raise ValidationError({"agent": "The selected agent is not active or does not exist."}) from exc
+                if not AgentStation.objects.filter(agent=agent, station=station, is_active=True).exists():
+                    raise ValidationError({"agent": "The selected agent is not assigned to the receiving station."})
             ticket.transfer_to(
                 station,
                 transferred_by=request.user,
