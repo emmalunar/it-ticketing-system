@@ -542,7 +542,7 @@ button, a, input, select, textarea {
 .requester-hero {
   position: relative;
   isolation: isolate;
-  min-height: 236px;
+  min-height: 208px;
   overflow: hidden;
   border: 1px solid #ccebdc;
   background: linear-gradient(120deg, #effcf5 0%, #e4f8ee 100%);
