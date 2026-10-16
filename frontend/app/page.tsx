@@ -65,6 +65,7 @@ function scrollToDestination(id: string) {
   });
 }
 
+const welcomeSlideStorageKey = "service-desk-welcome-slide";
 const maxTicketImageSize = 10 * 1024 * 1024;
 
 type TicketImage = {
@@ -72,6 +73,12 @@ type TicketImage = {
   file: File;
   preview: string;
 };
+
+const welcomeSlides = [
+  { eyebrow: "Support that moves with you", title: "A helpful hand, right when you need it.", description: "Tell us what’s slowing you down. Our team is ready to help you get back to your best work.", image: "https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=1000&q=80", imageAlt: "Bright collaborative office workspace" },
+  { eyebrow: "Your team is here", title: "Let’s find the fix together.", description: "You’re not on your own. Share the details and we’ll work through the next steps with you.", image: "https://images.unsplash.com/photo-1521737711867-e3b97375f902?auto=format&fit=crop&w=1000&q=80", imageAlt: "Colleagues working together around a table" },
+  { eyebrow: "Clear updates, every step", title: "Get back to what matters.", description: "From your first request to the final update, we’ll keep you informed and moving forward.", image: "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1000&q=80", imageAlt: "Welcoming modern office interior" },
+] as const;
 
 const priorityStyles: Record<Priority, string> = {
   P1: "border-[#e8c2b8] bg-[#fbefeb] text-[#9a5849]",
@@ -826,7 +833,31 @@ function UserDashboard({
   const [ticketImages, setTicketImages] = useState<TicketImage[]>([]);
   const [imageError, setImageError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [welcomeSlideIndex, setWelcomeSlideIndex] = useState(0);
+  const [welcomeSlideReady, setWelcomeSlideReady] = useState(false);
   const ticketImageUrls = useRef<string[]>([]);
+  useEffect(() => {
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const savedIndex = Number(window.sessionStorage.getItem(welcomeSlideStorageKey));
+        if (Number.isInteger(savedIndex) && savedIndex >= 0 && savedIndex < welcomeSlides.length) {
+          setWelcomeSlideIndex(savedIndex);
+        }
+      } catch (caught) {
+        console.warn("Unable to restore the welcome carousel position.", caught);
+      }
+      setWelcomeSlideReady(true);
+    }, 0);
+    return () => window.clearTimeout(restoreTimer);
+  }, []);
+  useEffect(() => {
+    if (!welcomeSlideReady) return;
+    try {
+      window.sessionStorage.setItem(welcomeSlideStorageKey, String(welcomeSlideIndex));
+    } catch (caught) {
+      console.warn("Unable to save the welcome carousel position.", caught);
+    }
+  }, [welcomeSlideIndex, welcomeSlideReady]);
   useEffect(() => () => {
     ticketImageUrls.current.forEach((url) => URL.revokeObjectURL(url));
   }, []);
@@ -950,6 +981,17 @@ function UserDashboard({
             <div className="header-actions"><button className="primary-action px-4 py-2.5 text-sm font-bold" onClick={() => setShowForm((visible) => !visible)} type="button">{showForm ? "Close form" : "+ New ticket"}</button><button className="sign-out-action" onClick={onLogout} type="button">Sign out</button></div>
           </header>
           <div className="app-content mx-auto px-5 py-7 sm:px-8">
+            <section className="requester-hero mb-6 rounded-[22px] p-5 pb-14 sm:p-6 sm:pb-14">
+              <SupportWelcomeCarousel activeIndex={welcomeSlideIndex} setActiveIndex={setWelcomeSlideIndex} />
+              <div className="requester-hero-content flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="max-w-xl">
+                  <p className="eyebrow">{welcomeSlides[welcomeSlideIndex].eyebrow}</p>
+                  <h2 aria-live="polite" className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">{welcomeSlides[welcomeSlideIndex].title}</h2>
+                  <p className="mt-2 max-w-lg text-sm leading-6 text-[#047857]">{welcomeSlides[welcomeSlideIndex].description}</p>
+                </div>
+                <button className="request-action shrink-0 px-5 py-3 text-sm font-bold" onClick={() => setShowForm(true)} type="button">Start a request <span aria-hidden="true" className="ml-2">→</span></button>
+              </div>
+            </section>
             {error && <div className="mb-5 rounded-xl border border-[#e8c2b8] bg-[#fbefeb] px-4 py-3 text-sm text-[#9a5849]">{error}<button className="ml-3 font-bold underline" onClick={onRefresh} type="button">Retry</button></div>}
             {showForm && (
               <form onSubmit={submitTicket} className="request-form content-card mb-7 p-4 sm:p-7">
@@ -1006,6 +1048,56 @@ function UserDashboard({
         </section>
       </div>
     </main>
+  );
+}
+
+function SupportWelcomeCarousel({ activeIndex, setActiveIndex }: {
+  activeIndex: number;
+  setActiveIndex: React.Dispatch<React.SetStateAction<number>>;
+}) {
+  const [paused, setPaused] = useState(false);
+  const slide = welcomeSlides[activeIndex];
+
+  useEffect(() => {
+    if (paused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let interval: number | undefined;
+    const stop = () => {
+      if (interval !== undefined) window.clearInterval(interval);
+      interval = undefined;
+    };
+    const start = () => {
+      if (document.visibilityState === "visible" && interval === undefined) {
+        interval = window.setInterval(() => {
+          setActiveIndex((current) => (current + 1) % welcomeSlides.length);
+        }, 6000);
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") start();
+      else stop();
+    };
+    start();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [paused, setActiveIndex]);
+
+  return (
+    <div aria-label={`Service desk welcome: ${slide.eyebrow}. ${slide.title}`} aria-roledescription="carousel" className="welcome-carousel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocus={() => setPaused(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setPaused(false); }}>
+      <Image alt={slide.imageAlt} className="welcome-artwork-image" fill priority={activeIndex === 0} sizes="(max-width: 700px) 100vw, 80vw" src={slide.image} unoptimized />
+      <div aria-hidden="true" className="welcome-image-scrim" />
+      <div className="welcome-carousel-controls">
+        <div aria-label={`Slide ${activeIndex + 1} of ${welcomeSlides.length}`} className="welcome-carousel-dots">
+          {welcomeSlides.map((item, index) => (
+            <button key={item.eyebrow} aria-label={`Show welcome slide ${index + 1}`} aria-current={activeIndex === index ? "true" : undefined} onClick={() => setActiveIndex(index)} type="button" />
+          ))}
+        </div>
+        <button aria-label="Previous welcome slide" onClick={() => setActiveIndex((activeIndex + welcomeSlides.length - 1) % welcomeSlides.length)} type="button">←</button>
+        <button aria-label="Next welcome slide" onClick={() => setActiveIndex((activeIndex + 1) % welcomeSlides.length)} type="button">→</button>
+      </div>
+    </div>
   );
 }
 
