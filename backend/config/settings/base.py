@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlsplit
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -60,16 +62,75 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
-DATABASES = {
-    "default": {
+
+def _database_config_from_url(database_url):
+    try:
+        parsed_url = urlsplit(database_url.strip())
+        port = parsed_url.port
+    except ValueError as error:
+        raise ImproperlyConfigured(
+            "SUPABASE_DB_URL must be a valid PostgreSQL connection URI."
+        ) from error
+
+    if (
+        parsed_url.scheme not in {"postgres", "postgresql"}
+        or not parsed_url.hostname
+        or not parsed_url.path.strip("/")
+        or not parsed_url.username
+        or parsed_url.password is None
+    ):
+        raise ImproperlyConfigured(
+            "SUPABASE_DB_URL must include a PostgreSQL host, database, username, and password."
+        )
+
+    sslmode = parse_qs(parsed_url.query).get("sslmode", ["require"])[0]
+    if sslmode not in {"require", "verify-ca", "verify-full"}:
+        raise ImproperlyConfigured(
+            "SUPABASE_DB_URL must use sslmode=require, verify-ca, or verify-full."
+        )
+
+    return {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": unquote(parsed_url.path.strip("/")),
+        "USER": unquote(parsed_url.username),
+        "PASSWORD": unquote(parsed_url.password),
+        "HOST": parsed_url.hostname,
+        "PORT": port or 5432,
+        "OPTIONS": {"sslmode": sslmode},
+        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
+        "CONN_HEALTH_CHECKS": True,
+    }
+
+
+def get_database_config(default_sqlite=True):
+    supabase_database_url = os.getenv("SUPABASE_DB_URL")
+    if supabase_database_url:
+        return _database_config_from_url(supabase_database_url)
+
+    if default_sqlite and os.getenv("USE_SQLITE", "true").lower() == "true":
+        return {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+
+    if not default_sqlite:
+        required_settings = ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD")
+        if any(not os.getenv(setting) for setting in required_settings):
+            raise ImproperlyConfigured(
+                "Set SUPABASE_DB_URL or provide POSTGRES_DB, POSTGRES_USER, and "
+                "POSTGRES_PASSWORD for production."
+            )
+
+    return {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.getenv("POSTGRES_DB", "it_ticketing"),
         "USER": os.getenv("POSTGRES_USER", "it_ticketing"),
         "PASSWORD": os.getenv("POSTGRES_PASSWORD", "it_ticketing"),
         "HOST": os.getenv("POSTGRES_HOST", "localhost"),
         "PORT": os.getenv("POSTGRES_PORT", "5432"),
+        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "300")),
+        "CONN_HEALTH_CHECKS": False,
     }
-}
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -99,26 +160,7 @@ REST_FRAMEWORK = {
     ],
 }
 
-USE_SQLITE = os.getenv("USE_SQLITE", "true").lower() == "true"
-
-if USE_SQLITE or not os.getenv("POSTGRES_HOST"):
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
-    }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.getenv("POSTGRES_DB", "it_ticketing"),
-            "USER": os.getenv("POSTGRES_USER", "it_ticketing"),
-            "PASSWORD": os.getenv("POSTGRES_PASSWORD", "it_ticketing"),
-            "HOST": os.getenv("POSTGRES_HOST", "localhost"),
-            "PORT": os.getenv("POSTGRES_PORT", "5432"),
-        }
-    }
+DATABASES = {"default": get_database_config()}
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 

@@ -46,6 +46,40 @@ class TestAttachmentApi:
         assert attachment.file_size == len(b"support notes")
         assert default_storage.exists(attachment.storage_key)
 
+    def test_user_can_upload_svg_image(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post(
+            f"/api/v1/tickets/{self.ticket.pk}/attachments/",
+            {
+                "file": SimpleUploadedFile(
+                    "diagram.svg",
+                    b"<svg xmlns='http://www.w3.org/2000/svg'/>",
+                    content_type="image/svg+xml",
+                )
+            },
+            format="multipart",
+        )
+
+        assert response.status_code == 201
+        assert Attachment.objects.get().content_type == "image/svg+xml"
+
+    def test_user_cannot_upload_gif_image(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post(
+            f"/api/v1/tickets/{self.ticket.pk}/attachments/",
+            {
+                "file": SimpleUploadedFile(
+                    "animation.gif",
+                    b"GIF89a",
+                    content_type="image/gif",
+                )
+            },
+            format="multipart",
+        )
+
+        assert response.status_code == 400
+        assert not Attachment.objects.exists()
+
     def test_user_cannot_upload_internal_attachment(self):
         response = self.upload(self.user, Attachment.Visibility.INTERNAL)
 

@@ -1,4 +1,4 @@
-from django.db.models import QuerySet
+from django.db.models import Count, Q, QuerySet
 
 from apps.tickets.models import Ticket
 
@@ -67,10 +67,16 @@ def queue_summary(station_id=None) -> dict:
         status__in=ACTIVE_STATUSES,
     )
     if station_id:
-           lookup = "station_id__in" if isinstance(station_id, (list, tuple)) else "station_id"
-           queryset = queryset.filter(**{lookup: station_id})
-    return {
-        "p1_count": queryset.filter(priority=Ticket.Priority.P1).count(),
-        "p2_count": queryset.filter(priority=Ticket.Priority.P2, status=Ticket.Status.QUEUED).count(),
-        "p3_count": queryset.filter(priority=Ticket.Priority.P3, status=Ticket.Status.QUEUED).count(),
-    }
+        lookup = "station_id__in" if isinstance(station_id, (list, tuple)) else "station_id"
+        queryset = queryset.filter(**{lookup: station_id})
+    return queryset.aggregate(
+        p1_count=Count("pk", filter=Q(priority=Ticket.Priority.P1)),
+        p2_count=Count(
+            "pk",
+            filter=Q(priority=Ticket.Priority.P2, status=Ticket.Status.QUEUED),
+        ),
+        p3_count=Count(
+            "pk",
+            filter=Q(priority=Ticket.Priority.P3, status=Ticket.Status.QUEUED),
+        ),
+    )

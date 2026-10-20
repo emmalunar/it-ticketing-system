@@ -35,6 +35,25 @@ Implementation phase: Project Foundation.
 
 For backend development directly on Windows, copy `.env.example` to `.env` and configure the local service endpoints and secrets there. Generate separate secrets locally—for example, run `python -c "import secrets; print(secrets.token_urlsafe(50))"` for each password/key—and set a unique, non-default `MINIO_ROOT_USER` if you later enable object storage. Compose requires non-empty PostgreSQL settings. Docker service ports bind to localhost only: PostgreSQL is published on host port `5433` to avoid conflicts with a PostgreSQL instance already using `5432`, and Redis is on `6379`. Services running inside Compose use their Compose service names instead.
 
+### Use Supabase PostgreSQL
+
+In the Supabase dashboard, open **Connect** and copy a PostgreSQL connection URI for the network mode supported by your application host. Put it in `.env` as `SUPABASE_DB_URL`, and set `USE_SQLITE=false`. The Supabase URI takes precedence over the local `POSTGRES_*` settings; database connections use TLS by default (`sslmode=require`). Django keeps PostgreSQL connections open for 60 seconds by default to avoid reconnect overhead; set `DB_CONN_MAX_AGE=0` if you use Supabase's transaction pooler. Keep the URI private and do not commit `.env`.
+
+```dotenv
+SUPABASE_DB_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require
+USE_SQLITE=false
+```
+
+Run the migrations against the configured Supabase project, then verify the connection:
+
+```bash
+cd backend
+python manage.py migrate --settings=config.settings.dev
+python verify_postgres.py
+```
+
+This provisions the schema only; it does not copy records from an existing SQLite or local PostgreSQL database. Back up and migrate any existing production data as a separate, verified operation before switching users to Supabase.
+
 ```bash
 docker compose up -d postgres redis
 ```

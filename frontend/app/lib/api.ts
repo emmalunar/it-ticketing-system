@@ -29,6 +29,8 @@ export type UserTicket = {
   status: string;
   priority: "P1" | "P2" | "P3";
   assignee: string | null;
+  assignee_name?: string | null;
+  assigned_by_me?: boolean;
   requester_name?: string;
   requester_username?: string;
   created_at: string;
@@ -55,11 +57,26 @@ export type AdminUserInput = {
 
 export type TicketOptions = {
   stations: { id: string; name: string; code: string }[];
-  problem_types: { id: string; name: string; category: string }[];
+  problem_types: {
+    id: string;
+    name: string;
+    category: string;
+    category_id: string;
+    description: string;
+    is_active: boolean;
+  }[];
+  officers: { id: string; name: string; station: string }[];
 };
 
 type QueueResponse = { data: QueueTicket[] };
 type SummaryResponse = { data: { p1_count: number; p2_count: number; p3_count: number } };
+
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -80,8 +97,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const fieldErrors = body && typeof body === "object"
       ? Object.entries(body).map(([field, errors]) => `${field}: ${Array.isArray(errors) ? errors.join(", ") : String(errors)}`).join("; ")
       : "";
-    throw new Error(
+    throw new ApiRequestError(
       typeof message === "string" ? message : fieldErrors || `Request failed (${response.status})`,
+      response.status,
     );
   }
   return response.json() as Promise<T>;
@@ -151,6 +169,24 @@ export function saveAdminUser(input: AdminUserInput, userId?: string) {
   });
 }
 
+export function createAdminStation(input: { name: string; code: string; description: string }) {
+  return request<{ id: string; name: string; code: string; description: string; is_active: boolean }>(
+    "/api/v1/admin/stations/",
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function transferOfficerStation(input: {
+  officer: string;
+  from_station: string;
+  to_station: string;
+}) {
+  return request<{ officer: string; stations: TicketOptions["stations"] }>(
+    "/api/v1/admin/stations/transfer-officer/",
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
 export function archiveTicket(ticketId: string) {
   return request<UserTicket>(`/api/v1/tickets/${ticketId}/archive/`, {
     method: "POST",
@@ -159,9 +195,29 @@ export function archiveTicket(ticketId: string) {
 }
 
 export function claimTicket(ticketId: string) {
-  return request(`/api/v1/tickets/${ticketId}/claim/`, {
+  return request<UserTicket>(`/api/v1/tickets/${ticketId}/claim/`, {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+export function createIssueType(input: { name: string; category_name: string; description: string }) {
+  return request<TicketOptions["problem_types"][number]>("/api/v1/admin/issue-types/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteIssueType(issueTypeId: string) {
+  return request<TicketOptions["problem_types"][number]>(`/api/v1/admin/issue-types/${issueTypeId}/`, {
+    method: "DELETE",
+  });
+}
+
+export function restoreIssueType(issueTypeId: string) {
+  return request<TicketOptions["problem_types"][number]>(`/api/v1/admin/issue-types/${issueTypeId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_active: true }),
   });
 }
 

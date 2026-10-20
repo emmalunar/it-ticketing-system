@@ -26,7 +26,7 @@ def main():
     except DatabaseError:
         raise SystemExit(
             "Could not connect to PostgreSQL with the configured database settings. "
-            "Check POSTGRES_HOST, POSTGRES_PORT, and the database credentials in .env."
+            "Check SUPABASE_DB_URL or the POSTGRES_* settings in .env."
         ) from None
 
     configured_database = settings.DATABASES["default"]["NAME"]
@@ -56,5 +56,6 @@ if __name__ == "__main__":
     except DatabaseError:
         sys.exit(
             "PostgreSQL verification failed while checking the database. "
-            "Check that the database is available and the .env settings are correct."
+            "Check that the database is available and SUPABASE_DB_URL or the "
+            "POSTGRES_* settings are correct."
         )

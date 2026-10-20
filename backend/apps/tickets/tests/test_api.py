@@ -70,13 +70,53 @@ class TestTicketApi:
         assert data["stations"] == [
             {"id": str(self.station.pk), "name": self.station.name, "code": self.station.code}
         ]
-        assert data["problem_types"] == [
-            {
-                "id": str(self.problem_type.pk),
-                "name": self.problem_type.name,
-                "category": self.problem_type.category.name,
-            }
-        ]
+        problem_types = {item["name"]: item for item in data["problem_types"]}
+        assert problem_types[self.problem_type.name] == {
+            "id": str(self.problem_type.pk),
+            "name": self.problem_type.name,
+            "category": self.problem_type.category.name,
+            "category_id": str(self.problem_type.category.pk),
+            "description": self.problem_type.description,
+            "is_active": True,
+        }
+        default_issue_types = {
+            "Software Error": "Application crashes, unexpected behavior, or error pop-ups.",
+            "Hardware Issue": "Problems with physical equipment like monitors, keyboards, or mice.",
+            "Network & Wi-Fi": "Issues connecting to the office network, or internet services.",
+            "Access & Permissions": "Account lockouts, password resets, or authorization requests.",
+            "Printer Issue": "Paper Jam, Tray Empty, Toner exhausted, Printer Network, Unable to print.",
+        }
+        assert all(
+            problem_types[name]["description"] == description
+            for name, description in default_issue_types.items()
+        )
+        assert data["officers"] == []
+
+    def test_agent_ticket_options_include_cross_station_transfer_targets(self):
+        destination = Station.objects.create(name="North Office", code="NORTH")
+        recipient = User.objects.create_user(
+            username="receiving-agent",
+            password="test-password",
+            role=User.Role.AGENT,
+        )
+        AgentStation.objects.create(agent=recipient, station=destination)
+        self.client.force_authenticate(self.agent)
+
+        response = self.client.get("/api/v1/tickets/options/")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert {station["id"] for station in data["stations"]} == {
+            str(self.station.pk),
+            str(destination.pk),
+        }
+        assert {
+            (officer["id"], officer["station"])
+            for officer in data["officers"]
+        } == {
+            (str(self.agent.pk), str(self.station.pk)),
+            (str(recipient.pk), str(destination.pk)),
+        }
 
     def test_agent_can_claim_ticket_at_assigned_station(self):
         ticket = Ticket.objects.create(
@@ -90,6 +130,8 @@ class TestTicketApi:
         response = self.client.post(f"/api/v1/tickets/{ticket.pk}/claim/", {}, format="json")
 
         assert response.status_code == 200
+        assert str(response.data["assignee"]) == str(self.agent.pk)
+        assert response.data["assigned_by_me"] is True
         ticket.refresh_from_db()
         assert ticket.assignee == self.agent
         assert ticket.status == Ticket.Status.IN_PROGRESS
@@ -157,8 +199,8 @@ class TestTicketApi:
         prior_assignment = ticket.assignments.get(agent=self.agent)
         assert prior_assignment.ended_at is not None
 
-    def test_agent_cannot_transfer_to_an_unauthorized_station(self):
-        destination = Station.objects.create(name="Restricted Office", code="RESTRICTED")
+    def test_agent_can_transfer_to_another_active_station(self):
+        destination = Station.objects.create(name="Remote Office", code="REMOTE")
         ticket = Ticket.objects.create(
             user=self.user,
             station=self.station,
@@ -173,10 +215,43 @@ class TestTicketApi:
             format="json",
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 200
         ticket.refresh_from_db()
-        assert ticket.station == self.station
-        assert not TicketTransfer.objects.filter(ticket=ticket).exists()
+        assert ticket.station == destination
+        assert TicketTransfer.objects.filter(
+            ticket=ticket,
+            from_station=self.station,
+            to_station=destination,
+        ).exists()
+
+    def test_agent_can_transfer_ticket_to_officer_at_another_station(self):
+        destination = Station.objects.create(name="Remote Office", code="REMOTE")
+        receiving_officer = User.objects.create_user(
+            username="receiving-agent",
+            password="test-password",
+            role=User.Role.AGENT,
+        )
+        AgentStation.objects.create(agent=receiving_officer, station=destination)
+        ticket = Ticket.objects.create(
+            user=self.user,
+            station=self.station,
+            problem_type=self.problem_type,
+            description="Needs a specialist",
+        )
+        ticket.assign_to(self.agent, assigned_by=self.agent)
+        self.client.force_authenticate(self.agent)
+
+        response = self.client.post(
+            f"/api/v1/tickets/{ticket.pk}/transfer/",
+            {"station": str(destination.pk), "agent": str(receiving_officer.pk)},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        ticket.refresh_from_db()
+        assert ticket.station == destination
+        assert ticket.assignee == receiving_officer
+        assert ticket.status == Ticket.Status.IN_PROGRESS
 
     def test_admin_can_claim_and_transfer_across_stations(self):
         destination = Station.objects.create(name="Admin Destination", code="ADMIN-DEST")
@@ -195,6 +270,8 @@ class TestTicketApi:
 
         claim = self.client.post(f"/api/v1/tickets/{ticket.pk}/claim/", {}, format="json")
         assert claim.status_code == 200
+        assert str(claim.data["assignee"]) == str(admin.pk)
+        assert claim.data["assigned_by_me"] is True
         ticket.refresh_from_db()
         assert ticket.assignee == admin
 
@@ -209,6 +286,41 @@ class TestTicketApi:
         assert ticket.station == destination
         assert ticket.assignee is None
         assert ticket.status == Ticket.Status.QUEUED
+
+    def test_admin_can_add_and_delete_issue_catalog_items(self):
+        admin = User.objects.create_user(username="catalog-admin", role=User.Role.ADMIN)
+        self.client.force_authenticate(admin)
+
+        created = self.client.post(
+            "/api/v1/admin/issue-types/",
+            {
+                "name": "VPN access",
+                "category_name": "Connectivity",
+                "description": "VPN connection and access issues.",
+            },
+            format="json",
+        )
+
+        assert created.status_code == 201
+        assert created.data["name"] == "VPN access"
+        assert created.data["is_active"] is True
+
+        deleted = self.client.delete(f"/api/v1/admin/issue-types/{created.data['id']}/")
+
+        assert deleted.status_code == 200
+        assert deleted.data["is_active"] is False
+        assert ProblemType.objects.filter(pk=created.data["id"]).exists()
+
+    def test_non_admin_cannot_manage_issue_catalog(self):
+        self.client.force_authenticate(self.agent)
+
+        response = self.client.post(
+            "/api/v1/admin/issue-types/",
+            {"name": "Restricted", "category_name": "IT Support"},
+            format="json",
+        )
+
+        assert response.status_code == 403
 
     def test_user_cannot_see_internal_messages(self):
         ticket = Ticket.objects.create(

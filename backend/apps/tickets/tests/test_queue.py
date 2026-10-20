@@ -1,13 +1,15 @@
 import pytest
 from datetime import timedelta
 
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
 from apps.stations.models import AgentStation, Station
 from apps.tickets.models import ProblemCategory, ProblemType, Ticket
-from apps.tickets.queue import queue_position, queue_tickets
+from apps.tickets.queue import queue_position, queue_summary, queue_tickets
 
 
 @pytest.mark.django_db
@@ -65,3 +67,19 @@ class TestTicketQueue:
         assert response.status_code == 200
         assert len(response.data["data"]) == 1
         assert response.data["data"][0]["ticket_number"].startswith("IT-")
+
+    def test_queue_summary_uses_one_aggregate_query(self):
+        self.create_ticket(self.p2_user)
+        self.create_ticket(self.p3_user)
+        critical_user = User.objects.create_user(
+            username="critical-queue",
+            password="test-password",
+            priority_level=User.PriorityLevel.P1,
+        )
+        self.create_ticket(critical_user)
+
+        with CaptureQueriesContext(connection) as queries:
+            summary = queue_summary(self.station.pk)
+
+        assert summary == {"p1_count": 1, "p2_count": 1, "p3_count": 1}
+        assert len(queries) == 1

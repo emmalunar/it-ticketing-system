@@ -306,7 +306,9 @@ DJANGO_SECRET_KEY
 
 DJANGO_ALLOWED_HOSTS 
 
-DATABASE_URL 
+SUPABASE_DB_URL (Supabase PostgreSQL connection URI)
+
+POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST, POSTGRES_PORT (local or self-managed PostgreSQL)
 
 REDIS_URL 
 
@@ -364,7 +366,9 @@ The exact configuration must reflect the actual production web-server topology.
 
 PostgreSQL is the production database. 
 
-Before deployment: 
+Supabase PostgreSQL may be used as the managed PostgreSQL provider. Configure its connection URI in `SUPABASE_DB_URL`; Django continues to use its ORM and migrations. The connection URI must remain secret, and connections must use TLS. When `SUPABASE_DB_URL` is configured, it takes precedence over local `POSTGRES_*` settings.
+
+Before deployment:
 
 1. Provision the production database. 2. Create the application database/user. 3. Configure secure credentials. 4. Restrict database access. 5. Configure connection settings. 6. Run Django migrations. 7. Verify database integrity. 8. Create required initial configuration. 9. Create the first administrative account through a controlled process. 
 
@@ -1513,4 +1517,3 @@ Controlled Production Deployment
 Portable and Maintainable System 
 
 The exact production operating system, web server, runtime management, container support, and service configuration must be confirmed before final production deployment rather than assumed during development. 
-

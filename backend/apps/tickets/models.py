@@ -79,6 +79,13 @@ class Ticket(models.Model):
 
     class Meta:
         db_table = "tickets"
+        indexes = [
+            models.Index(
+                fields=("station", "status", "priority", "created_at"),
+                name="ticket_station_queue_idx",
+            ),
+            models.Index(fields=("user", "created_at"), name="ticket_user_created_idx"),
+        ]
 
     def clean(self):
         super().clean()

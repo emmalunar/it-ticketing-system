@@ -2,6 +2,7 @@ import mimetypes
 import uuid
 
 from django.core.files.storage import default_storage
+from django.db.models import Exists, OuterRef, Q
 from django.http import FileResponse
 from django.utils import timezone
 from django.utils.text import get_valid_filename
@@ -16,8 +17,18 @@ from rest_framework.views import APIView
 from apps.accounts.models import User
 from apps.stations.models import AgentStation, Station
 from apps.tickets.queue import queue_position, queue_summary, queue_tickets
-from apps.tickets.models import Attachment, Feedback, FeedbackToken, ProblemType, Ticket, TicketMessage
+from apps.tickets.models import (
+    Attachment,
+    Feedback,
+    FeedbackToken,
+    ProblemCategory,
+    ProblemType,
+    Ticket,
+    TicketAssignment,
+    TicketMessage,
+)
 from apps.tickets.serializers import (
+    AdminProblemTypeSerializer,
     AttachmentSerializer,
     ClaimSerializer,
     FeedbackSerializer,
@@ -31,9 +42,9 @@ from apps.tickets.serializers import (
 MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
 ALLOWED_ATTACHMENT_TYPES = {
     "application/pdf",
-    "image/gif",
     "image/jpeg",
     "image/png",
+    "image/svg+xml",
     "text/plain",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -48,10 +59,20 @@ class TicketViewSet(viewsets.ModelViewSet):
         queryset = Ticket.objects.select_related("user", "station", "problem_type", "assignee")
         user = self.request.user
         if user.role == User.Role.ADMIN:
-            return queryset
+            return queryset.annotate(
+                was_assigned_by_request_user=Exists(
+                    TicketAssignment.objects.filter(ticket_id=OuterRef("pk"), agent=user)
+                )
+            )
         if user.role == User.Role.AGENT:
             station_ids = AgentStation.objects.filter(agent=user, is_active=True).values("station_id")
-            return queryset.filter(station_id__in=station_ids)
+            return queryset.annotate(
+                was_assigned_by_request_user=Exists(
+                    TicketAssignment.objects.filter(ticket_id=OuterRef("pk"), agent=user)
+                )
+            ).filter(
+                Q(station_id__in=station_ids) | Q(assignments__agent=user)
+            ).distinct()
         return queryset.filter(user=user)
 
     def perform_create(self, serializer):
@@ -102,6 +123,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                     "message": "This ticket is already assigned or is not available to claim.",
                 })
             ticket.assign_to(request.user, assigned_by=request.user, reason=serializer.validated_data.get("reason", ""))
+            ticket.was_assigned_by_request_user = True
         return Response(TicketSerializer(ticket, context={"request": request}).data)
 
     @action(detail=True, methods=("get",), url_path="queue-position")
@@ -129,12 +151,15 @@ class TicketViewSet(viewsets.ModelViewSet):
             serializer = TransferSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
             station = serializer.validated_data["station"]
-            self._require_station_access(station)
             agent_id = serializer.validated_data.get("agent")
             agent = None
             if agent_id:
                 try:
-                    agent = User.objects.get(pk=agent_id, role=User.Role.AGENT, is_active=True)
+                    agent = User.objects.get(
+                        pk=agent_id,
+                        role__in=(User.Role.AGENT, User.Role.ADMIN),
+                        is_active=True,
+                    )
                 except User.DoesNotExist as exc:
                     raise ValidationError({"agent": "The selected agent is not active or does not exist."}) from exc
                 if not AgentStation.objects.filter(agent=agent, station=station, is_active=True).exists():
@@ -257,25 +282,79 @@ class TicketOptionsView(APIView):
 
     def get(self, request):
         stations = request.user.agent_stations.filter(is_active=True).select_related("station")
-        if request.user.role in (User.Role.USER, User.Role.ADMIN):
-            station_list = list(
-                Station.objects.filter(is_active=True)
-                .order_by("name")
-                .values("id", "name", "code")
-            )
-        else:
-            station_list = [
-                {"id": item.station_id, "name": item.station.name, "code": item.station.code}
-                for item in stations.order_by("station__name")
+        station_list = list(
+            Station.objects.filter(is_active=True)
+            .order_by("name")
+            .values("id", "name", "code")
+        )
+        problem_types = ProblemType.objects.select_related("category").order_by(
+            "category__sort_order", "sort_order", "name"
+        )
+        if request.user.role != User.Role.ADMIN:
+            problem_types = problem_types.filter(is_active=True, category__is_active=True)
+        officers = []
+        if request.user.role in (User.Role.AGENT, User.Role.ADMIN):
+            assignments = AgentStation.objects.filter(
+                is_active=True,
+                agent__is_active=True,
+                agent__role__in=(User.Role.AGENT, User.Role.ADMIN),
+                station__is_active=True,
+            ).select_related("agent", "station").order_by("agent__first_name", "agent__username")
+            officers = [
+                {
+                    "id": item.agent_id,
+                    "name": item.agent.get_full_name() or item.agent.username,
+                    "station": item.station_id,
+                }
+                for item in assignments
             ]
-        problem_types = ProblemType.objects.filter(is_active=True, category__is_active=True).select_related("category").order_by("category__sort_order", "sort_order", "name")
         return Response({
             "stations": station_list,
             "problem_types": [
-                {"id": item.id, "name": item.name, "category": item.category.name}
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "category": item.category.name,
+                    "category_id": item.category_id,
+                    "description": item.description,
+                    "is_active": item.is_active and item.category.is_active,
+                }
                 for item in problem_types
             ],
+            "officers": officers,
         })
+
+
+class AdminProblemTypeView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if request.user.role != User.Role.ADMIN:
+            raise PermissionDenied("Only administrators can manage the issue catalog.")
+
+    def post(self, request):
+        serializer = AdminProblemTypeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        problem_type = serializer.save()
+        return Response(
+            AdminProblemTypeSerializer(problem_type).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def patch(self, request, pk):
+        if set(request.data) != {"is_active"} or not isinstance(request.data["is_active"], bool):
+            raise ValidationError({"is_active": "Provide a boolean active state."})
+        problem_type = ProblemType.objects.select_related("category").get(pk=pk)
+        problem_type.is_active = request.data["is_active"]
+        problem_type.save(update_fields=("is_active", "updated_at"))
+        return Response(AdminProblemTypeSerializer(problem_type).data)
+
+    def delete(self, request, pk):
+        problem_type = ProblemType.objects.select_related("category").get(pk=pk)
+        problem_type.is_active = False
+        problem_type.save(update_fields=("is_active", "updated_at"))
+        return Response(AdminProblemTypeSerializer(problem_type).data)
 
 
 class QueueSummaryView(APIView):

@@ -12,19 +12,23 @@ import {
   getCurrentUser,
   getAdminUsers,
   getCsrfCookie,
-  getQueue,
-  getQueueSummary,
   getTicketOptions,
   login,
   logout,
   archiveTicket,
+  ApiRequestError,
+  createAdminStation,
+  createIssueType,
+  deleteIssueType,
   saveAdminUser,
+  restoreIssueType,
   uploadTicketAttachment,
   type ApiUser,
   type AdminUserInput,
   type ManagedUser,
   type TicketOptions,
   type UserTicket,
+  transferOfficerStation,
   transferTicket,
 } from "./lib/api";
 
@@ -65,7 +69,7 @@ function scrollToDestination(id: string) {
   });
 }
 
-const welcomeSlideStorageKey = "service-desk-welcome-slide";
+const welcomeSlideStorageKey = "it-service-desk-welcome-slide";
 const maxTicketImageSize = 10 * 1024 * 1024;
 
 type TicketImage = {
@@ -92,6 +96,29 @@ function formatAge(createdAt: string) {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+function summarizeTickets(tickets: UserTicket[]) {
+  const activeStatuses = new Set(["QUEUED", "IN_PROGRESS", "WAITING_USER", "REOPENED"]);
+  return {
+    p1_count: tickets.filter((ticket) => ticket.priority === "P1" && activeStatuses.has(ticket.status)).length,
+    p2_count: tickets.filter((ticket) => ticket.priority === "P2" && ticket.status === "QUEUED").length,
+    p3_count: tickets.filter((ticket) => ticket.priority === "P3" && ticket.status === "QUEUED").length,
+  };
+}
+
+function mapOfficerTicket(ticket: UserTicket, stationNames: Map<string, string>, currentUserId: string): Ticket {
+  return {
+    id: ticket.id,
+    number: ticket.ticket_number,
+    title: ticket.description,
+    station: ticket.station_name || stationNames.get(ticket.station) || "Station",
+    stationId: ticket.station,
+    priority: ticket.priority,
+    status: ticket.status,
+    age: formatAge(ticket.created_at),
+    owner: ticket.assignee === currentUserId ? "You" : ticket.assignee_name || (ticket.assignee ? "Assigned" : "Unassigned"),
+  };
+}
+
 export default function Home() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [officerActiveTickets, setOfficerActiveTickets] = useState<Ticket[]>([]);
@@ -102,6 +129,9 @@ export default function Home() {
     return destination === "waiting" || destination === "critical" || destination === "active" ? destination : "all";
   });
   const [myTickets, setMyTickets] = useState<UserTicket[]>([]);
+  const [officerRecords, setOfficerRecords] = useState<UserTicket[]>([]);
+  const [showOfficerRecords, setShowOfficerRecords] = useState(true);
+  const [claimedTicketNotice, setClaimedTicketNotice] = useState<Ticket | null>(null);
   const [ticketOptions, setTicketOptions] = useState<TicketOptions | null>(null);
   const [selected, setSelected] = useState<Ticket | null>(null);
   const [user, setUser] = useState<ApiUser | null>(null);
@@ -112,6 +142,7 @@ export default function Home() {
   const [claiming, setClaiming] = useState(false);
   const [transferring, setTransferring] = useState(false);
   const [transferStationId, setTransferStationId] = useState("");
+  const [transferAgentId, setTransferAgentId] = useState("");
   const [transferReason, setTransferReason] = useState("");
   const [authenticating, setAuthenticating] = useState(false);
   const [username, setUsername] = useState("");
@@ -123,7 +154,7 @@ export default function Home() {
     try {
       setError(null);
       setLoading(true);
-      const currentUser = authenticatedUser ?? await getCurrentUser();
+      const currentUser = authenticatedUser ?? user ?? await getCurrentUser();
       if (requestId !== dashboardRequestId.current) return;
       setUser(currentUser);
       if (currentUser.role === "USER") {
@@ -145,51 +176,34 @@ export default function Home() {
         setActiveWorkload(0);
         return;
       }
-      const [queue, queueSummary, accessibleTickets] = await Promise.all([getQueue(), getQueueSummary(), getAccessibleTickets()]);
+      const [accessibleTickets, options] = await Promise.all([getAccessibleTickets(), getTicketOptions()]);
       if (requestId !== dashboardRequestId.current) return;
+      setTicketOptions(options);
+      setOfficerRecords(accessibleTickets.filter((ticket) => ticket.assigned_by_me));
+      const queueSummary = summarizeTickets(accessibleTickets);
       setActiveWorkload(accessibleTickets.filter((ticket) =>
         ticket.assignee === currentUser.id && ["IN_PROGRESS", "WAITING_USER"].includes(ticket.status),
       ).length);
       const activeStatuses = new Set(["QUEUED", "IN_PROGRESS", "WAITING_USER", "REOPENED"]);
       const urgentTickets = accessibleTickets.filter((ticket) => ticket.priority === "P1" && activeStatuses.has(ticket.status));
       const stationNames = new Map(currentUser.stations.map((station) => [station.id, station.name]));
-      const mappedUrgent = urgentTickets.map((ticket) => ({
-        id: ticket.id,
-        number: ticket.ticket_number,
-        title: ticket.description,
-        station: ticket.station_name || stationNames.get(ticket.station) || "Station",
-        stationId: ticket.station,
-        priority: ticket.priority,
-        status: ticket.status,
-        age: formatAge(ticket.created_at),
-        owner: ticket.assignee ? "Assigned" : "Unassigned",
-      }));
-      const mappedQueue = queue.data.map((ticket) => ({
-        id: ticket.id,
-        number: ticket.ticket_number,
-        title: `${ticket.priority} ticket awaiting review`,
-        station: ticket.station.name,
-        stationId: ticket.station.id,
-        priority: ticket.priority,
-        status: ticket.status,
-        age: formatAge(ticket.created_at),
-        owner: ticket.assignee ? "Assigned" : "Unassigned",
-      }));
+      const mappedUrgent = urgentTickets.map((ticket) => mapOfficerTicket(ticket, stationNames, currentUser.id));
+      const mappedQueue = accessibleTickets
+        .filter((ticket) => ticket.status === "QUEUED" && ["P2", "P3"].includes(ticket.priority))
+        .map((ticket) => ({
+          item: mapOfficerTicket(ticket, stationNames, currentUser.id),
+          createdAt: ticket.created_at,
+        }))
+        .sort((left, right) => {
+          const priorityOrder = left.item.priority.localeCompare(right.item.priority);
+          return priorityOrder || Date.parse(left.createdAt) - Date.parse(right.createdAt);
+        })
+        .map(({ item }) => item);
       const mappedActive = accessibleTickets
         .filter((ticket) =>
           ticket.assignee === currentUser.id && ["IN_PROGRESS", "WAITING_USER"].includes(ticket.status),
         )
-        .map((ticket) => ({
-          id: ticket.id,
-          number: ticket.ticket_number,
-          title: ticket.description,
-          station: ticket.station_name || stationNames.get(ticket.station) || "Station",
-          stationId: ticket.station,
-          priority: ticket.priority,
-          status: ticket.status,
-          age: formatAge(ticket.created_at),
-          owner: "Assigned",
-        }));
+        .map((ticket) => mapOfficerTicket(ticket, stationNames, currentUser.id));
       const mapped = [...mappedUrgent, ...mappedQueue];
       setTickets(mapped);
       setOfficerActiveTickets(mappedActive);
@@ -201,11 +215,19 @@ export default function Home() {
             ? mapped.filter((ticket) => ticket.priority === "P1" && activeStatuses.has(ticket.status))
             : mapped;
       setSelected((current) => initialOfficerTickets.find((ticket) => ticket.id === current?.id) ?? initialOfficerTickets[0] ?? null);
-      setSummary(queueSummary.data);
+      setSummary(queueSummary);
       setMyTickets([]);
     } catch (caught) {
       if (requestId === dashboardRequestId.current) {
-        setError(caught instanceof Error ? caught.message : "Unable to load your dashboard.");
+        if (!authenticatedUser && caught instanceof ApiRequestError && [401, 403].includes(caught.status)) {
+          setUser(null);
+          setError(null);
+          setTickets([]);
+          setOfficerActiveTickets([]);
+          setMyTickets([]);
+        } else {
+          setError(caught instanceof Error ? caught.message : "Unable to load your dashboard.");
+        }
       }
     } finally {
       if (requestId === dashboardRequestId.current) setLoading(false);
@@ -262,8 +284,32 @@ export default function Home() {
     if (!ticket || claiming) return;
     setClaiming(true);
     try {
-      await claimTicket(ticket.id);
-      await loadDashboard();
+      const claimedTicket = await claimTicket(ticket.id);
+      const mappedTicket = mapOfficerTicket(
+        claimedTicket,
+        new Map(user?.stations.map((station) => [station.id, station.name]) ?? []),
+        user?.id ?? "",
+      );
+      setTickets((current) => claimedTicket.priority === "P1"
+        ? current.map((item) => item.id === mappedTicket.id ? mappedTicket : item)
+        : current.filter((item) => item.id !== mappedTicket.id));
+      setOfficerActiveTickets((current) => [
+        mappedTicket,
+        ...current.filter((item) => item.id !== mappedTicket.id),
+      ]);
+      setOfficerRecords((current) => [
+        claimedTicket,
+        ...current.filter((item) => item.id !== claimedTicket.id),
+      ]);
+      setClaimedTicketNotice(mappedTicket);
+      setSummary((current) => ({
+        ...current,
+        p2_count: Math.max(0, current.p2_count - (claimedTicket.priority === "P2" ? 1 : 0)),
+        p3_count: Math.max(0, current.p3_count - (claimedTicket.priority === "P3" ? 1 : 0)),
+      }));
+      setActiveWorkload((current) => current + 1);
+      setSelected(mappedTicket);
+      setOfficerFilter("active");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to claim this ticket.");
     } finally {
@@ -275,8 +321,13 @@ export default function Home() {
     if (!ticket || !transferStationId || transferring) return;
     setTransferring(true);
     try {
-      await transferTicket(ticket.id, { station: transferStationId, reason: transferReason });
+      await transferTicket(ticket.id, {
+        station: transferStationId,
+        agent: transferAgentId || undefined,
+        reason: transferReason,
+      });
       setTransferStationId("");
+      setTransferAgentId("");
       setTransferReason("");
       await loadDashboard();
     } catch (caught) {
@@ -291,7 +342,9 @@ export default function Home() {
     setAuthenticating(true);
     setError(null);
     try {
-      await getCsrfCookie();
+      if (!document.cookie.split("; ").some((cookie) => cookie.startsWith("csrftoken="))) {
+        await getCsrfCookie();
+      }
       const result = await login(username, password);
       await loadDashboard(result.user);
     } catch (caught) {
@@ -305,7 +358,7 @@ export default function Home() {
     try {
       await logout();
       setUser(null);
-      setError("Authentication credentials were not provided.");
+      setError(null);
       setTickets([]);
       setMyTickets([]);
     } catch (caught) {
@@ -350,12 +403,30 @@ export default function Home() {
               <p className="eyebrow">IT officer workspace</p>
               <h1 className="page-title mt-1">Ticket queue</h1>
             </div>
-            <div className="header-actions"><div className="service-indicator"><span />Service live</div><div className="user-avatar" aria-label={user.username}>{user.first_name.slice(0, 1) || user.username.slice(0, 1)}{user.last_name.slice(0, 1)}</div><button className="sign-out-action" onClick={() => void handleLogout()} type="button">Sign out</button></div>
+            <div className="header-actions"><div className="user-avatar" aria-label={user.username}>{user.first_name.slice(0, 1) || user.username.slice(0, 1)}{user.last_name.slice(0, 1)}</div><button className="sign-out-action" onClick={() => void handleLogout()} type="button">Sign out</button></div>
           </header>
           <div className="app-content mx-auto px-5 py-7 sm:px-8">
             <div className="mb-6 flex items-end justify-between gap-4"><div><p className="text-sm font-medium text-[#74817b]">Live station overview</p><h2 className="section-heading mt-1">{officerFilter === "waiting" ? "Waiting now" : officerFilter === "critical" ? "P1 critical" : officerFilter === "active" ? "Active tickets" : "Ticket queue"}</h2></div><div className="text-right text-sm font-medium text-[#74817b]">{user?.stations.map((station) => station.name).join(", ") || "All stations"}</div></div>
             {error && <div className="mb-5 rounded-xl border border-[#e8c2b8] bg-[#fbefeb] px-4 py-3 text-sm text-[#9a5849]">{error} <button className="ml-3 font-bold underline" onClick={() => { setLoading(true); void loadDashboard(); }}>Retry</button></div>}
+            {claimedTicketNotice && <section aria-live="polite" className="content-card mb-5 border-2 border-[#8bc9a8] bg-[#effaf3] p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div><p className="text-xs font-extrabold uppercase tracking-[0.16em] text-[#047857]">Ticket assigned to you</p><h2 className="mt-1 text-lg font-bold text-[#263a31]">{claimedTicketNotice.number} · {claimedTicketNotice.title}</h2></div>
+                <span className="rounded-full bg-[#d1fae5] px-3 py-1 text-xs font-extrabold text-[#047857]">Owner: You</span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-[#43594b]"><span>{claimedTicketNotice.station}</span><span>{claimedTicketNotice.priority}</span><StatusBadge status={claimedTicketNotice.status} /></div>
+            </section>}
             <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4"><Metric href="/?view=officer&destination=waiting" onNavigate={() => navigateToOfficerFilter("waiting")} label="Waiting now" value={String(summary.p2_count + summary.p3_count)} note="P2 and P3 in queue" tone="open" /><Metric href="/?view=officer&destination=critical" onNavigate={() => navigateToOfficerFilter("critical")} label="P1 critical" value={String(summary.p1_count)} note="Immediate handling" tone="critical" /><Metric href="/?view=officer&destination=active" onNavigate={() => navigateToOfficerFilter("active")} label="Active tickets" value={String(activeWorkload)} note="Assigned for handling" tone="active" /><Metric label="Queue status" value={loading ? "…" : "Live"} note="Django API connected" /></div>
+            <section aria-label="Your ticket records" className="content-card mt-5">
+              <div className="card-heading flex items-center justify-between gap-3 border-b px-5 py-3">
+                <div><h3 className="section-heading text-base">Your ticket records</h3><p className="mt-1 text-xs text-[#74817b]">{officerRecords.length} ticket{officerRecords.length === 1 ? "" : "s"} assigned to you</p></div>
+                <button aria-expanded={showOfficerRecords} className="secondary-action border px-3 py-2 text-xs font-bold" onClick={() => setShowOfficerRecords((current) => !current)} type="button">{showOfficerRecords ? "Hide records" : "View records"}</button>
+              </div>
+              {showOfficerRecords && (officerRecords.length ? <div className="divide-y divide-[#edf0e7]">
+                {officerRecords.slice(0, 5).map((record) => <div key={record.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+                  <div className="min-w-0"><p className="text-xs font-bold text-[#788763]">{record.ticket_number} <span className="font-medium text-[#899181]">· {record.station_name}</span></p><p className="mt-1 truncate text-sm font-medium text-[#344a3e]">{record.description}</p></div><StatusBadge status={record.status} />
+                </div>)}
+              </div> : <p className="px-5 py-4 text-sm text-[#74817b]">Tickets you claim will appear here.</p>)}
+            </section>
             <div className={`mt-7 grid gap-5 ${displayedSelected ? "xl:grid-cols-[minmax(0,1fr)_340px]" : "xl:grid-cols-[minmax(0,1fr)_300px]"}`}>
               <section className="content-card scroll-destination" id="officer-queue">
                 <div className="card-heading flex items-center justify-between border-b px-5 py-4">
@@ -388,23 +459,29 @@ export default function Home() {
                 <aside className="ticket-detail-panel rounded-3xl border p-5 text-[#263a31] shadow-[0_14px_32px_rgba(49,91,76,0.06)] sm:p-6">
                   <div className="flex items-start justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#667c31]">Selected ticket</p><h3 className="mt-2 font-sans text-2xl font-bold tracking-tight">{displayedSelected.number}</h3></div><span className={`rounded-md border px-2 py-1 text-[10px] font-bold ${priorityStyles[displayedSelected.priority]}`}>{displayedSelected.priority}</span></div>
                   <p className="mt-5 break-words text-base font-semibold leading-6">{displayedSelected.title}</p>
-                  <div className="mt-5 space-y-4 border-y border-[#dce8df] py-5"><Detail label="Station" value={displayedSelected.station} /><div className="flex items-center justify-between gap-3 text-sm"><span className="text-[#526242]">Status</span><StatusBadge status={displayedSelected.status} /></div><Detail label="Current owner" value={displayedSelected.owner} /><Detail label="Queue age" value={`${displayedSelected.age} ago`} /></div>
+                  <div className="mt-5 space-y-4 border-y border-[#dce8df] py-5"><Detail label="Station" value={displayedSelected.station} /><div className="flex items-center justify-between gap-3 text-sm"><span className="text-[#526242]">Status</span><StatusBadge status={displayedSelected.status} /></div><div className="flex items-center justify-between gap-3 text-sm"><span className="font-semibold text-[#526242]">Current owner</span><span className={`rounded-full px-3 py-1 font-extrabold ${displayedSelected.owner === "You" ? "bg-[#d1fae5] text-[#047857]" : "bg-[#f2f4ee] text-[#52605a]"}`}>{displayedSelected.owner}</span></div><Detail label="Queue age" value={`${displayedSelected.age} ago`} /></div>
                   <p className="mt-5 text-sm leading-6 text-[#526242]">{displayedSelected.owner === "Unassigned" ? "Review the request and claim it when you’re ready to take ownership." : "This request has an assigned owner. Review its current status and coordinate with the assigned team member."}</p>
                   <button disabled={claiming || displayedSelected.owner !== "Unassigned" || !["QUEUED", "REOPENED"].includes(displayedSelected.status)} onClick={() => void handleClaim(displayedSelected)} className="primary-action mt-5 w-full px-4 py-3 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50">{claiming ? "Claiming…" : displayedSelected.owner === "Unassigned" && ["QUEUED", "REOPENED"].includes(displayedSelected.status) ? "Claim ticket" : displayedSelected.owner === "Unassigned" ? "Not claimable" : "Ticket assigned"}</button>
-                  {user.stations.some((station) => station.id !== displayedSelected.stationId) && (
-                    <div className="mt-5 border-t border-[#dce8df] pt-5">
-                      <label className="admin-field">Transfer to station
-                        <select className="mt-2" onChange={(event) => setTransferStationId(event.target.value)} value={transferStationId}>
-                          <option value="">Choose a station</option>
-                          {user.stations.filter((station) => station.id !== displayedSelected.stationId).map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}
+                  <div className="mt-5 border-t border-[#dce8df] pt-5">
+                    <label className="admin-field">Transfer to station
+                      <select className="mt-2" onChange={(event) => { setTransferStationId(event.target.value); setTransferAgentId(""); }} value={transferStationId}>
+                        <option value="">Choose a station</option>
+                        {ticketOptions?.stations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}
+                      </select>
+                    </label>
+                    {transferStationId && (
+                      <label className="admin-field mt-3">Assign to officer (optional)
+                        <select className="mt-2" onChange={(event) => setTransferAgentId(event.target.value)} value={transferAgentId}>
+                          <option value="">Leave in station queue</option>
+                          {ticketOptions?.officers.filter((officer) => officer.station === transferStationId && officer.id !== user.id).map((officer) => <option key={officer.id} value={officer.id}>{officer.name}</option>)}
                         </select>
                       </label>
-                      <label className="admin-field mt-3">Transfer reason (optional)
-                        <input onChange={(event) => setTransferReason(event.target.value)} value={transferReason} />
-                      </label>
-                      <button className="secondary-action mt-3 w-full border px-4 py-3 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50" disabled={transferring || !transferStationId || ["RESOLVED", "CLOSED"].includes(displayedSelected.status)} onClick={() => void handleTransfer(displayedSelected)} type="button">{transferring ? "Transferring…" : "Transfer ticket"}</button>
-                    </div>
-                  )}
+                    )}
+                    <label className="admin-field mt-3">Transfer reason (optional)
+                      <input onChange={(event) => setTransferReason(event.target.value)} value={transferReason} />
+                    </label>
+                    <button className="secondary-action mt-3 w-full border px-4 py-3 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50" disabled={transferring || !transferStationId || ["RESOLVED", "CLOSED"].includes(displayedSelected.status)} onClick={() => void handleTransfer(displayedSelected)} type="button">{transferring ? "Transferring…" : "Transfer ticket"}</button>
+                  </div>
                 </aside>
               ) : <aside className="empty-guide"><span className="empty-guide-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M12 3.5 14.6 9l5.9.8-4.3 4.1 1 5.8-5.2-2.8-5.2 2.8 1-5.8-4.3-4.1 5.9-.8L12 3.5Z" strokeLinejoin="round" /></svg></span><h3>You’re all caught up</h3><p>Your queue is clear. When a request needs attention, you’ll find its details and next steps here.</p><span className="service-indicator"><span />System ready</span></aside>}
             </div>
@@ -438,10 +515,23 @@ function AdminDashboard({ user, onLogout }: {
   const [ticketPriority, setTicketPriority] = useState(initialAdminState.ticketPriority);
   const [roleFilter, setRoleFilter] = useState(initialAdminState.roleFilter);
   const [selectedAdminTicketId, setSelectedAdminTicketId] = useState("");
+  const [claimedTicketNotice, setClaimedTicketNotice] = useState<UserTicket | null>(null);
   const [adminTransferStationId, setAdminTransferStationId] = useState("");
   const [adminTransferReason, setAdminTransferReason] = useState("");
+  const [adminTransferAgentId, setAdminTransferAgentId] = useState("");
   const [editingUser, setEditingUser] = useState<ManagedUser | null>(null);
   const [userFormOpen, setUserFormOpen] = useState(false);
+  const [newStation, setNewStation] = useState({ name: "", code: "", description: "" });
+  const [officerStationTransfer, setOfficerStationTransfer] = useState({
+    officer: "",
+    from_station: "",
+    to_station: "",
+  });
+  const [issueTypeForm, setIssueTypeForm] = useState({
+    name: "",
+    category_name: "IT Support",
+    description: "",
+  });
   const [userForm, setUserForm] = useState<AdminUserInput>({
     username: "",
     password: "",
@@ -457,16 +547,15 @@ function AdminDashboard({ user, onLogout }: {
     setLoading(true);
     setError(null);
     try {
-      const [managedUsers, allTickets, ticketOptions, queueSummary] = await Promise.all([
+      const [managedUsers, allTickets, ticketOptions] = await Promise.all([
         getAdminUsers(),
         getAccessibleTickets(),
         getTicketOptions(),
-        getQueueSummary(),
       ]);
       setUsers(managedUsers);
       setTickets(allTickets);
       setOptions(ticketOptions);
-      setSummary(queueSummary.data);
+      setSummary(summarizeTickets(allTickets));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to load administrator data.");
     } finally {
@@ -512,6 +601,9 @@ function AdminDashboard({ user, onLogout }: {
   );
   const activeWorkTickets = tickets.filter((item) => ["IN_PROGRESS", "WAITING_USER"].includes(item.status));
   const openTickets = tickets.filter((item) => ["QUEUED", "REOPENED"].includes(item.status));
+  const adminAssignedTickets = tickets
+    .filter((item) => item.assigned_by_me)
+    .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
   const selectedAdminTicket = tickets.find((item) => item.id === selectedAdminTicketId);
   const filteredUsers = users.filter((item) => {
     const matchesRole = roleFilter === "ALL"
@@ -629,8 +721,10 @@ function AdminDashboard({ user, onLogout }: {
     setWorking(true);
     setError(null);
     try {
-      await claimTicket(ticket.id);
-      await refreshAdminData();
+      const claimedTicket = await claimTicket(ticket.id);
+      setTickets((current) => current.map((item) => item.id === claimedTicket.id ? claimedTicket : item));
+      setClaimedTicketNotice(claimedTicket);
+      setSelectedAdminTicketId(claimedTicket.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to claim this ticket.");
     } finally {
@@ -643,9 +737,14 @@ function AdminDashboard({ user, onLogout }: {
     setWorking(true);
     setError(null);
     try {
-      await transferTicket(ticket.id, { station: adminTransferStationId, reason: adminTransferReason });
+      await transferTicket(ticket.id, {
+        station: adminTransferStationId,
+        agent: adminTransferAgentId || undefined,
+        reason: adminTransferReason,
+      });
       setSelectedAdminTicketId("");
       setAdminTransferStationId("");
+      setAdminTransferAgentId("");
       setAdminTransferReason("");
       await refreshAdminData();
     } catch (caught) {
@@ -653,6 +752,101 @@ function AdminDashboard({ user, onLogout }: {
     } finally {
       setWorking(false);
     }
+  }
+
+  async function createStation(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWorking(true);
+    setError(null);
+    try {
+      await createAdminStation(newStation);
+      setNewStation({ name: "", code: "", description: "" });
+      await refreshAdminData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to create this station.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function transferOfficer(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWorking(true);
+    setError(null);
+    try {
+      await transferOfficerStation(officerStationTransfer);
+      setOfficerStationTransfer({ officer: "", from_station: "", to_station: "" });
+      await refreshAdminData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to transfer this IT officer.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function submitIssueType(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWorking(true);
+    setError(null);
+    try {
+      const issueType = await createIssueType(issueTypeForm);
+      setOptions((current) => current ? {
+        ...current,
+        problem_types: [...current.problem_types, issueType].sort((left, right) =>
+          left.category.localeCompare(right.category) || left.name.localeCompare(right.name),
+        ),
+      } : current);
+      setIssueTypeForm({ name: "", category_name: "IT Support", description: "" });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to add this issue type.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function removeIssueType(issueTypeId: string) {
+    const issueType = options?.problem_types.find((item) => item.id === issueTypeId);
+    if (!issueType || !window.confirm(`Delete “${issueType.name}” from future ticket forms? Existing ticket records will be preserved.`)) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const updatedIssueType = await deleteIssueType(issueTypeId);
+      setOptions((current) => current ? {
+        ...current,
+        problem_types: current.problem_types.map((item) =>
+          item.id === updatedIssueType.id ? updatedIssueType : item,
+        ),
+      } : current);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to delete this issue type.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function reactivateIssueType(issueTypeId: string) {
+    setWorking(true);
+    setError(null);
+    try {
+      const updatedIssueType = await restoreIssueType(issueTypeId);
+      setOptions((current) => current ? {
+        ...current,
+        problem_types: current.problem_types.map((item) =>
+          item.id === updatedIssueType.id ? updatedIssueType : item,
+        ),
+      } : current);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to restore this issue type.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  function selectAdminTicket(ticketId: string) {
+    setSelectedAdminTicketId(ticketId);
+    setAdminTransferStationId("");
+    setAdminTransferAgentId("");
+    window.setTimeout(() => scrollToDestination("admin-selected-ticket"), 0);
   }
 
   const navItems = [
@@ -703,14 +897,21 @@ function AdminDashboard({ user, onLogout }: {
         </aside>
         <section className="min-w-0 flex-1">
           <header className="app-header flex items-center justify-between border-b px-5 py-4 sm:px-8">
-            <div><p className="eyebrow">Service desk administration</p><h1 className="page-title mt-1">Control center</h1></div>
-            <div className="header-actions"><div className="service-indicator"><span />Service live</div><div className="user-avatar" aria-label={user.username}>{user.first_name.slice(0, 1) || user.username.slice(0, 1)}</div><button className="sign-out-action" onClick={onLogout} type="button">Sign out</button></div>
+            <div><p className="eyebrow">IT service desk administration</p><h1 className="page-title mt-1">Control center</h1></div>
+            <div className="header-actions"><div className="user-avatar" aria-label={user.username}>{user.first_name.slice(0, 1) || user.username.slice(0, 1)}{user.last_name.slice(0, 1)}</div><button className="sign-out-action" onClick={onLogout} type="button">Sign out</button></div>
           </header>
           <div className="app-content mx-auto px-5 py-7 sm:px-8" id="admin-content">
             <div className="admin-mobile-nav mb-5 lg:hidden">
               {navItems.map(([key, label]) => <button key={key} aria-current={section === key ? "page" : undefined} className={section === key ? "is-active" : ""} onClick={() => navigateToAdminSection(key)} type="button">{label}</button>)}
             </div>
             {error && <div className="mb-5 rounded-xl border border-[#e8c2b8] bg-[#fbefeb] px-4 py-3 text-sm text-[#9a5849]" role="alert">{error}<button className="ml-3 font-bold underline" onClick={() => void refreshAdminData()} type="button">Retry</button></div>}
+            {claimedTicketNotice && <section aria-live="polite" className="content-card mb-5 border-2 border-[#8bc9a8] bg-[#effaf3] p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div><p className="text-xs font-extrabold uppercase tracking-[0.16em] text-[#047857]">Ticket assigned to you</p><h2 className="mt-1 text-lg font-bold text-[#263a31]">{claimedTicketNotice.ticket_number} · {claimedTicketNotice.description}</h2></div>
+                <span className="rounded-full bg-[#d1fae5] px-3 py-1 text-xs font-extrabold text-[#047857]">Owner: You</span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-[#43594b]"><span>{claimedTicketNotice.station_name}</span><span>{claimedTicketNotice.priority}</span><StatusBadge status={claimedTicketNotice.status} /></div>
+            </section>}
             <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
               <div><p className="text-sm font-medium text-[#74817b]">System overview</p><h2 className="section-heading mt-1">{navItems.find(([key]) => key === section)?.[1]}</h2></div>
               <button className="secondary-action border px-3 py-2 text-xs font-bold" disabled={loading || working} onClick={() => void refreshAdminData()} type="button">{loading ? "Refreshing…" : "Refresh data"}</button>
@@ -722,6 +923,22 @@ function AdminDashboard({ user, onLogout }: {
               <Metric href="/?view=admin&destination=active-tickets" onNavigate={() => navigateToAdminDestination("active-tickets")} label="Active tickets" value={String(activeWorkTickets.length)} note="In progress or awaiting user" tone="active" />
               <Metric href="/?view=admin&destination=critical-queue" onNavigate={() => navigateToAdminDestination("critical-queue")} label="Critical queue" value={String(summary.p1_count)} note="Priority P1" tone="critical" />
             </div>
+            {adminAssignedTickets.length > 0 && (
+              <section aria-label="Your ticket records" className="content-card mb-6">
+                <div className="card-heading flex flex-wrap items-center justify-between gap-2 border-b px-5 py-3">
+                  <div><h3 className="section-heading text-base">Tickets assigned to you</h3><p className="mt-1 text-xs text-[#74817b]">Your ticket history · {adminAssignedTickets.length} record{adminAssignedTickets.length === 1 ? "" : "s"}</p></div>
+                  <button className="text-xs font-bold text-[#047857]" onClick={() => navigateToAdminSection("tickets")} type="button">View ticket records →</button>
+                </div>
+                <div className="divide-y divide-[#edf0e7]">
+                  {adminAssignedTickets.slice(0, 3).map((ticket) => (
+                    <button key={ticket.id} className="flex w-full flex-wrap items-center justify-between gap-3 px-5 py-3 text-left hover:bg-[#f8faf7]" onClick={() => { setSection("tickets"); selectAdminTicket(ticket.id); }} type="button">
+                      <span className="min-w-0"><strong className="mr-2 text-xs text-[#788763]">{ticket.ticket_number}</strong><span className="text-sm font-medium text-[#344a3e]">{ticket.description}</span></span>
+                      <StatusBadge status={ticket.status} />
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {section === "overview" && (
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,.8fr)]">
@@ -746,14 +963,15 @@ function AdminDashboard({ user, onLogout }: {
                   <div><h3 className="section-heading text-lg">All ticket records</h3><p className="mt-1 text-xs text-[#74817b]">Ticket history is retained; closing archives it from the active queue.</p></div>
                   <div className="flex flex-wrap gap-2"><input aria-label="Search tickets" className="admin-search" onChange={(event) => setSearch(event.target.value)} placeholder="Search tickets…" value={search} /><select aria-label="Filter tickets by status" className="admin-filter" onChange={(event) => setTicketStatus(event.target.value)} value={ticketStatus}><option value="ALL">All statuses</option><option value="OPEN">Open · waiting to be claimed</option><option value="ACTIVE">Active · in progress or awaiting user</option><option value="ACTIVE_QUEUE">All active queue statuses</option>{["QUEUED", "IN_PROGRESS", "WAITING_USER", "REOPENED", "RESOLVED", "CLOSED"].map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}</select><select aria-label="Filter tickets by priority" className="admin-filter" onChange={(event) => setTicketPriority(event.target.value)} value={ticketPriority}><option value="ALL">All priorities</option>{["P1", "P2", "P3"].map((priority) => <option key={priority} value={priority}>{priority}{priority === "P1" ? " · Critical" : ""}</option>)}</select></div>
                 </div>
-                {filteredTickets.length ? <div className="overflow-x-auto"><table className="data-table admin-record-table w-full min-w-[760px] text-left"><thead><tr><th className="px-4 py-2.5">Ticket</th><th className="px-3 py-2.5">Requester</th><th className="px-3 py-2.5">Location / issue</th><th className="px-3 py-2.5">Priority</th><th className="px-3 py-2.5">Status</th><th className="px-4 py-2.5">Action</th></tr></thead><tbody>{filteredTickets.map((ticket) => <tr key={ticket.id} className="border-t border-[#edf0e7]"><td className="px-4 py-3"><p className="text-[11px] font-bold text-[#788763]">{ticket.ticket_number}</p><p className="mt-1 max-w-[220px] truncate text-sm font-medium text-[#344a3e]">{ticket.description}</p></td><td className="px-3 py-3 text-sm text-[#52605a]">{ticket.requester_name || ticket.requester_username || "Requester"}</td><td className="px-3 py-3 text-[11px] text-[#52605a]"><div className="truncate max-w-[190px]">{ticket.station_name}</div><div className="mt-1 truncate max-w-[190px] text-[#74817b]">{ticket.problem_type_name}</div></td><td className="px-3 py-3"><span className={`rounded-md border px-2 py-1 text-[10px] font-bold ${priorityStyles[ticket.priority]}`}>{ticket.priority}</span></td><td className="px-3 py-3"><StatusBadge status={ticket.status} /></td><td className="px-4 py-3"><div className="flex gap-2"><button className="secondary-action border px-3 py-2 text-[11px] font-bold" onClick={() => { setSelectedAdminTicketId(ticket.id); setAdminTransferStationId(""); }} type="button">Manage</button>{ticket.status !== "CLOSED" && <button className="admin-danger-action" disabled={working} onClick={() => void archiveAdminTicket(ticket)} type="button">Close</button>}</div></td></tr>)}</tbody></table></div> : <div className="empty-state"><p className="text-sm text-[#74817b]">{loading ? "Loading tickets…" : "No tickets match your filters."}</p></div>}
+                {filteredTickets.length ? <div className="overflow-x-auto"><table className="data-table admin-record-table w-full min-w-[760px] text-left"><thead><tr><th className="px-4 py-2.5">Ticket</th><th className="px-3 py-2.5">Requester</th><th className="px-3 py-2.5">Location / issue</th><th className="px-3 py-2.5">Priority</th><th className="px-3 py-2.5">Status</th><th className="px-4 py-2.5">Action</th></tr></thead><tbody>{filteredTickets.map((ticket) => <tr key={ticket.id} className="border-t border-[#edf0e7]"><td className="px-4 py-3"><p className="text-[11px] font-bold text-[#788763]">{ticket.ticket_number}</p><p className="mt-1 max-w-[220px] truncate text-sm font-medium text-[#344a3e]">{ticket.description}</p></td><td className="px-3 py-3 text-sm text-[#52605a]">{ticket.requester_name || ticket.requester_username || "Requester"}</td><td className="px-3 py-3 text-[11px] text-[#52605a]"><div className="truncate max-w-[190px]">{ticket.station_name}</div><div className="mt-1 truncate max-w-[190px] text-[#74817b]">{ticket.problem_type_name}</div></td><td className="px-3 py-3"><span className={`rounded-md border px-2 py-1 text-[10px] font-bold ${priorityStyles[ticket.priority]}`}>{ticket.priority}</span></td><td className="px-3 py-3"><StatusBadge status={ticket.status} /></td><td className="px-4 py-3"><div className="flex gap-2"><button className="secondary-action border px-3 py-2 text-[11px] font-bold" onClick={() => { setSelectedAdminTicketId(ticket.id); setAdminTransferStationId(""); setAdminTransferAgentId(""); }} type="button">Manage</button>{ticket.status !== "CLOSED" && <button className="admin-danger-action" disabled={working} onClick={() => void archiveAdminTicket(ticket)} type="button">Close</button>}</div></td></tr>)}</tbody></table></div> : <div className="empty-state"><p className="text-sm text-[#74817b]">{loading ? "Loading tickets…" : "No tickets match your filters."}</p></div>}
                 {selectedAdminTicket && (
-                  <div className="admin-user-form m-5">
+                  <div className="admin-user-form m-5 scroll-destination" id="admin-selected-ticket">
                     <div className="mb-4 flex items-start justify-between gap-3"><div><h4 className="font-semibold text-[#344a3e]">Manage {selectedAdminTicket.ticket_number}</h4><p className="mt-1 text-xs text-[#74817b]">Claim an eligible ticket or transfer it to another active station.</p></div><button className="secondary-action border px-3 py-2 text-xs font-bold" onClick={() => setSelectedAdminTicketId("")} type="button">Close</button></div>
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="admin-field">Transfer to station<select onChange={(event) => setAdminTransferStationId(event.target.value)} value={adminTransferStationId}><option value="">Choose a station</option>{options?.stations.filter((station) => station.id !== selectedAdminTicket.station).map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
+                      <label className="admin-field">Transfer to station<select onChange={(event) => { setAdminTransferStationId(event.target.value); setAdminTransferAgentId(""); }} value={adminTransferStationId}><option value="">Choose a station</option>{options?.stations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
                       <label className="admin-field">Transfer reason (optional)<input onChange={(event) => setAdminTransferReason(event.target.value)} value={adminTransferReason} /></label>
                     </div>
+                    {adminTransferStationId && <label className="admin-field mt-3">Assign to officer (optional)<select onChange={(event) => setAdminTransferAgentId(event.target.value)} value={adminTransferAgentId}><option value="">Leave in station queue</option>{options?.officers.filter((officer) => officer.station === adminTransferStationId).map((officer) => <option key={officer.id} value={officer.id}>{officer.name}</option>)}</select></label>}
                     <div className="mt-4 flex flex-wrap justify-end gap-2">
                       {!selectedAdminTicket.assignee && ["QUEUED", "REOPENED"].includes(selectedAdminTicket.status) && <button className="primary-action px-4 py-2.5 text-xs font-bold" disabled={working} onClick={() => void claimAdminTicket(selectedAdminTicket)} type="button">{working ? "Working…" : "Claim ticket"}</button>}
                       <button className="secondary-action border px-4 py-2.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50" disabled={working || !adminTransferStationId || ["RESOLVED", "CLOSED"].includes(selectedAdminTicket.status)} onClick={() => void transferAdminTicket(selectedAdminTicket)} type="button">{working ? "Working…" : "Transfer ticket"}</button>
@@ -787,9 +1005,46 @@ function AdminDashboard({ user, onLogout }: {
 
             {section === "setup" && (
               <div className="grid gap-5 xl:grid-cols-2 scroll-destination" id="admin-setup">
-                <section className="content-card"><div className="card-heading border-b px-5 py-4"><h3 className="section-heading text-lg">Service locations</h3><p className="mt-1 text-xs text-[#74817b]">Active locations available for ticket routing</p></div>{options?.stations.length ? <div className="divide-y divide-[#edf0e7]">{options.stations.map((station) => <div key={station.id} className="flex items-center justify-between gap-4 px-5 py-4"><div><p className="text-sm font-semibold text-[#344a3e]">{station.name}</p><p className="mt-1 text-xs text-[#74817b]">Station code · {station.code}</p></div><span className="account-state is-enabled">Active</span></div>)}</div> : <div className="empty-state"><p className="text-sm text-[#74817b]">No active stations configured.</p></div>}</section>
-                <section className="content-card"><div className="card-heading border-b px-5 py-4"><h3 className="section-heading text-lg">Issue catalog</h3><p className="mt-1 text-xs text-[#74817b]">Active issue types currently available to requesters</p></div>{options?.problem_types.length ? <div className="divide-y divide-[#edf0e7]">{options.problem_types.map((type) => <div key={type.id} className="flex items-center justify-between gap-4 px-5 py-4"><div><p className="text-sm font-semibold text-[#344a3e]">{type.name}</p><p className="mt-1 text-xs text-[#74817b]">{type.category}</p></div><span className="account-state is-enabled">Active</span></div>)}</div> : <div className="empty-state"><p className="text-sm text-[#74817b]">No active issue types configured.</p></div>}</section>
-                <p className="text-xs leading-5 text-[#74817b] xl:col-span-2">Station and issue catalog editing is available through <a className="font-semibold text-[#047857] underline" href="http://127.0.0.1:8000/admin/" rel="noreferrer" target="_blank">Django administration</a>. Use the control center for ticket records and account lifecycle management.</p>
+                <section className="content-card">
+                  <div className="card-heading border-b px-5 py-4"><h3 className="section-heading text-lg">Service locations</h3><p className="mt-1 text-xs text-[#74817b]">Active locations available for ticket routing</p></div>
+                  {options?.stations.length ? <div className="divide-y divide-[#edf0e7]">{options.stations.map((station) => <div key={station.id} className="flex items-center justify-between gap-4 px-5 py-4"><div><p className="text-sm font-semibold text-[#344a3e]">{station.name}</p><p className="mt-1 text-xs text-[#74817b]">Station code · {station.code}</p></div><span className="account-state is-enabled">Active</span></div>)}</div> : <div className="empty-state"><p className="text-sm text-[#74817b]">No active stations configured.</p></div>}
+                  <form className="border-t border-[#edf0e7] p-5" onSubmit={(event) => void createStation(event)}>
+                    <h4 className="text-sm font-bold text-[#344a3e]">Add a station</h4>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="admin-field">Station name<input maxLength={200} onChange={(event) => setNewStation({ ...newStation, name: event.target.value })} required value={newStation.name} /></label>
+                      <label className="admin-field">Station code<input maxLength={50} onChange={(event) => setNewStation({ ...newStation, code: event.target.value })} required value={newStation.code} /></label>
+                    </div>
+                    <label className="admin-field mt-3">Description (optional)<input onChange={(event) => setNewStation({ ...newStation, description: event.target.value })} value={newStation.description} /></label>
+                    <div className="mt-4 flex justify-end"><button className="primary-action px-4 py-2.5 text-xs font-bold" disabled={working} type="submit">{working ? "Saving…" : "Add station"}</button></div>
+                  </form>
+                </section>
+                <div className="grid gap-5">
+                  <section className="content-card">
+                    <div className="card-heading border-b px-5 py-4"><h3 className="section-heading text-lg">Transfer an IT officer</h3><p className="mt-1 text-xs text-[#74817b]">Move an officer between active stations. Other station assignments are retained.</p></div>
+                    <form className="space-y-3 p-5" onSubmit={(event) => void transferOfficer(event)}>
+                      <label className="admin-field">IT officer<select onChange={(event) => setOfficerStationTransfer({ officer: event.target.value, from_station: "", to_station: "" })} required value={officerStationTransfer.officer}><option value="">Choose an officer</option>{serviceOfficers.filter((officer) => officer.is_active).map((officer) => <option key={officer.id} value={officer.id}>{officer.first_name || officer.username} · {officer.role === "ADMIN" ? "Administrator" : "IT officer"}</option>)}</select></label>
+                      <label className="admin-field">Current station<select disabled={!officerStationTransfer.officer} onChange={(event) => setOfficerStationTransfer({ ...officerStationTransfer, from_station: event.target.value, to_station: "" })} required value={officerStationTransfer.from_station}><option value="">Choose current station</option>{users.find((officer) => officer.id === officerStationTransfer.officer)?.stations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
+                      <label className="admin-field">New station<select disabled={!officerStationTransfer.from_station} onChange={(event) => setOfficerStationTransfer({ ...officerStationTransfer, to_station: event.target.value })} required value={officerStationTransfer.to_station}><option value="">Choose destination</option>{options?.stations.filter((station) => station.id !== officerStationTransfer.from_station).map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
+                      <div className="flex justify-end"><button className="primary-action px-4 py-2.5 text-xs font-bold" disabled={working} type="submit">{working ? "Transferring…" : "Transfer officer"}</button></div>
+                    </form>
+                  </section>
+                  <section className="content-card">
+                    <div className="card-heading border-b px-5 py-4"><h3 className="section-heading text-lg">Issue catalog</h3><p className="mt-1 text-xs text-[#74817b]">Manage issue types available to requesters. Deleting a type preserves existing ticket records.</p></div>
+                    <form className="space-y-3 border-b border-[#edf0e7] p-5" onSubmit={(event) => void submitIssueType(event)}>
+                      <h4 className="text-sm font-bold text-[#344a3e]">Add an issue type</h4>
+                      <label className="admin-field">Issue name<input maxLength={200} onChange={(event) => setIssueTypeForm({ ...issueTypeForm, name: event.target.value })} required value={issueTypeForm.name} /></label>
+                      <label className="admin-field">Category<input maxLength={200} onChange={(event) => setIssueTypeForm({ ...issueTypeForm, category_name: event.target.value })} required value={issueTypeForm.category_name} /></label>
+                      <label className="admin-field">Description<input onChange={(event) => setIssueTypeForm({ ...issueTypeForm, description: event.target.value })} value={issueTypeForm.description} /></label>
+                      <div className="flex justify-end"><button className="primary-action px-4 py-2.5 text-xs font-bold" disabled={working} type="submit">{working ? "Saving…" : "Add issue type"}</button></div>
+                    </form>
+                    {options?.problem_types.length ? <div className="divide-y divide-[#edf0e7]">{options.problem_types.map((type) => <div key={type.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+                      <div className="min-w-0"><p className="text-sm font-semibold text-[#344a3e]">{type.name}<span className="ml-2 text-xs font-medium text-[#74817b]">· {type.category}</span></p><p className="mt-1 text-xs text-[#74817b]">{type.description || "No description provided."}</p><span className={`account-state mt-2 ${type.is_active ? "is-enabled" : "is-disabled"}`}>{type.is_active ? "Active" : "Inactive"}</span></div>
+                      {type.is_active
+                        ? <button className="admin-danger-action" disabled={working} onClick={() => void removeIssueType(type.id)} type="button">Delete</button>
+                        : <button className="admin-enable-action" disabled={working} onClick={() => void reactivateIssueType(type.id)} type="button">Reactivate</button>}
+                    </div>)}</div> : <div className="empty-state"><p className="text-sm text-[#74817b]">No issue types configured yet.</p></div>}
+                  </section>
+                </div>
               </div>
             )}
           </div>
@@ -836,6 +1091,7 @@ function UserDashboard({
   const [welcomeSlideIndex, setWelcomeSlideIndex] = useState(0);
   const [welcomeSlideReady, setWelcomeSlideReady] = useState(false);
   const ticketImageUrls = useRef<string[]>([]);
+  const formScrollRequested = useRef(false);
   useEffect(() => {
     const restoreTimer = window.setTimeout(() => {
       try {
@@ -878,6 +1134,11 @@ function UserDashboard({
     }
     scrollToDestination("requester-tickets");
   }, [requestFilter]);
+  useEffect(() => {
+    if (!showForm || !formScrollRequested.current) return;
+    formScrollRequested.current = false;
+    scrollToDestination("requester-ticket-form");
+  }, [showForm]);
   const stationNames = new Map((options?.stations ?? []).map((item) => [item.id, item.name]));
   const problemTypeNames = new Map((options?.problem_types ?? []).map((item) => [item.id, item.name]));
   const activeTickets = tickets.filter((ticket) => !["RESOLVED", "CLOSED"].includes(ticket.status));
@@ -888,13 +1149,18 @@ function UserDashboard({
       ? tickets.filter((ticket) => ticket.status === "IN_PROGRESS")
       : tickets;
 
+  function openTicketForm() {
+    formScrollRequested.current = true;
+    setShowForm(true);
+  }
+
   function addTicketImages(files: FileList | null) {
     const selectedFiles = Array.from(files ?? []);
-    const allowedTypes = ["image/png", "image/jpeg", "image/gif"];
+    const allowedTypes = ["image/png", "image/jpeg", "image/svg+xml"];
     const invalidType = selectedFiles.find((file) => !allowedTypes.includes(file.type));
     const oversized = selectedFiles.find((file) => file.size > maxTicketImageSize);
     if (invalidType) {
-      setImageError("Use PNG, JPEG, or GIF images. Other file types aren’t supported.");
+      setImageError("Use PNG, JPEG, or SVG images. Other file types aren’t supported.");
       return;
     }
     if (oversized) {
@@ -978,7 +1244,7 @@ function UserDashboard({
               <p className="eyebrow">Requester portal</p>
               <h1 className="page-title mt-1">My tickets</h1>
             </div>
-            <div className="header-actions"><button className="primary-action px-4 py-2.5 text-sm font-bold" onClick={() => setShowForm((visible) => !visible)} type="button">{showForm ? "Close form" : "+ New ticket"}</button><button className="sign-out-action" onClick={onLogout} type="button">Sign out</button></div>
+            <div className="header-actions"><button className="primary-action px-4 py-2.5 text-sm font-bold" onClick={() => showForm ? setShowForm(false) : openTicketForm()} type="button">{showForm ? "Close form" : "+ New ticket"}</button><button className="sign-out-action" onClick={onLogout} type="button">Sign out</button></div>
           </header>
           <div className="app-content mx-auto px-5 py-7 sm:px-8">
             <section className="requester-hero mb-6 rounded-[22px] p-5 pb-14 sm:p-6 sm:pb-14">
@@ -989,12 +1255,12 @@ function UserDashboard({
                   <h2 aria-live="polite" className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">{welcomeSlides[welcomeSlideIndex].title}</h2>
                   <p className="mt-2 max-w-lg text-sm leading-6 text-[#047857]">{welcomeSlides[welcomeSlideIndex].description}</p>
                 </div>
-                <button className="request-action shrink-0 px-5 py-3 text-sm font-bold" onClick={() => setShowForm(true)} type="button">Start a request <span aria-hidden="true" className="ml-2">→</span></button>
+                <button className="request-action shrink-0 px-5 py-3 text-sm font-bold" onClick={openTicketForm} type="button">Start a request <span aria-hidden="true" className="ml-2">→</span></button>
               </div>
             </section>
             {error && <div className="mb-5 rounded-xl border border-[#e8c2b8] bg-[#fbefeb] px-4 py-3 text-sm text-[#9a5849]">{error}<button className="ml-3 font-bold underline" onClick={onRefresh} type="button">Retry</button></div>}
             {showForm && (
-              <form onSubmit={submitTicket} className="request-form content-card mb-7 p-4 sm:p-7">
+              <form id="requester-ticket-form" onSubmit={submitTicket} className="request-form content-card scroll-mt-24 mb-7 p-4 sm:p-7">
                 <div className="mb-5 flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.15em] text-[#7d8678]">Get support</p><h2 className="mt-1 text-xl font-bold">Tell us what you need help with</h2></div><button className="secondary-action border px-3 py-2 text-xs font-bold" onClick={() => setShowForm(false)} type="button">Close</button></div>
                 <div className="request-form-grid grid gap-4 sm:grid-cols-2">
                   <label className="request-form-field text-sm font-semibold text-[#43503e]">Support location
@@ -1006,6 +1272,7 @@ function UserDashboard({
                     <select required value={problemType} onChange={(event) => setProblemType(event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe4d7] bg-white px-3 py-3 outline-none focus:border-[#9cba43] focus:ring-2 focus:ring-[#edf6ca]">
                       <option value="">Choose an issue type</option>{options?.problem_types.map((item) => <option key={item.id} value={item.id}>{item.category} · {item.name}</option>)}
                     </select>
+                    {problemType && <p className="mt-2 text-xs font-normal text-[#74817b]">{options?.problem_types.find((item) => item.id === problemType)?.description}</p>}
                   </label>
                 </div>
                 <label className="request-form-field mt-4 block text-sm font-semibold text-[#43503e]">Describe the issue
@@ -1041,7 +1308,7 @@ function UserDashboard({
                   </tr>)}</tbody>
                 </table></div>
                 </>
-              ) : <div className="empty-state text-left"><span className="empty-state-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M5 7.5h14v11H5zM8 4.5h8M9 11h6M9 14.5h4" strokeLinecap="round" strokeLinejoin="round" /></svg></span><div><p className="font-semibold text-[#344a3e]">{loading ? "Loading your requests…" : tickets.length ? "No requests match this view" : "No tickets yet"}</p><p className="mt-2 text-sm text-[#7d8981]">{loading ? "Your support requests will appear here." : tickets.length ? "Try another summary card to view your requests." : "When you need help, create a ticket and track it here."}</p>{!loading && tickets.length > 0 && <Link className="secondary-action mt-4 inline-flex border px-4 py-2.5 text-sm font-bold" href="/?view=requester&destination=all" scroll={false} onClick={() => setRequestFilter("all")}>View all requests</Link>}{!loading && !tickets.length && <button className="primary-action mt-4 px-4 py-2.5 text-sm font-bold" onClick={() => setShowForm(true)} type="button">Create your first ticket</button>}</div></div>}
+              ) : <div className="empty-state text-left"><span className="empty-state-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M5 7.5h14v11H5zM8 4.5h8M9 11h6M9 14.5h4" strokeLinecap="round" strokeLinejoin="round" /></svg></span><div><p className="font-semibold text-[#344a3e]">{loading ? "Loading your requests…" : tickets.length ? "No requests match this view" : "No tickets yet"}</p><p className="mt-2 text-sm text-[#7d8981]">{loading ? "Your support requests will appear here." : tickets.length ? "Try another summary card to view your requests." : "When you need help, create a ticket and track it here."}</p>{!loading && tickets.length > 0 && <Link className="secondary-action mt-4 inline-flex border px-4 py-2.5 text-sm font-bold" href="/?view=requester&destination=all" scroll={false} onClick={() => setRequestFilter("all")}>View all requests</Link>}{!loading && !tickets.length && <button className="primary-action mt-4 px-4 py-2.5 text-sm font-bold" onClick={openTicketForm} type="button">Create your first ticket</button>}</div></div>}
             </section>
             <p className="mt-5 text-xs text-[#7d8678]">{activeTickets.length} active request{activeTickets.length === 1 ? "" : "s"}</p>
           </div>
@@ -1085,7 +1352,7 @@ function SupportWelcomeCarousel({ activeIndex, setActiveIndex }: {
   }, [paused, setActiveIndex]);
 
   return (
-    <div aria-label={`Service desk welcome: ${slide.eyebrow}. ${slide.title}`} aria-roledescription="carousel" className="welcome-carousel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocus={() => setPaused(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setPaused(false); }}>
+    <div aria-label={`IT service desk welcome: ${slide.eyebrow}. ${slide.title}`} aria-roledescription="carousel" className="welcome-carousel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocus={() => setPaused(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setPaused(false); }}>
       <Image alt={slide.imageAlt} className="welcome-artwork-image" fill priority={activeIndex === 0} sizes="(max-width: 700px) 100vw, 80vw" src={slide.image} unoptimized />
       <div aria-hidden="true" className="welcome-image-scrim" />
       <div className="welcome-carousel-controls">
@@ -1120,11 +1387,11 @@ function RequesterImageCarousel({ images, error, onImagesSelected, onRemoveImage
   return (
     <section aria-label="Request image carousel" className="requester-carousel mt-6 overflow-hidden rounded-[20px] border">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
-        <div><h3 className="text-sm font-bold text-[#344a3e]">Add images to your request</h3><p className="mt-1 text-xs text-[#74817b]">Attach screenshots or photos to help explain the issue (PNG, JPEG, or GIF; up to 10 MB each).</p></div>
+        <div><h3 className="text-sm font-bold text-[#344a3e]">Add images to your request</h3><p className="mt-1 text-xs text-[#74817b]">Attach screenshots or photos to help explain the issue (PNG, JPEG, or SVG; up to 10 MB each).</p></div>
         <div className="flex items-center gap-2">
           {activeImage && <button className="secondary-action border px-3 py-2 text-xs font-bold" onClick={() => onRemoveImage(activeImage.id)} type="button">Remove</button>}
           <button className="primary-action px-3 py-2 text-xs font-bold" onClick={() => fileInput.current?.click()} type="button">{images.length ? "+ Add more" : "+ Add images"}</button>
-          <input ref={fileInput} accept="image/png,image/jpeg,image/gif" aria-label="Choose images to attach to request" className="sr-only" multiple onChange={(event) => { onImagesSelected(event.currentTarget.files); event.currentTarget.value = ""; }} type="file" />
+          <input ref={fileInput} accept="image/png,image/jpeg,image/svg+xml" aria-label="Choose images to attach to request" className="sr-only" multiple onChange={(event) => { onImagesSelected(event.currentTarget.files); event.currentTarget.value = ""; }} type="file" />
         </div>
       </div>
       <div className="requester-carousel-stage">
@@ -1200,7 +1467,7 @@ function BrandLockup({ caption, className = "" }: { caption: string; className?:
   return (
     <div className={`brand-lockup ${className}`}>
       <Image alt="OmniGroup" className="brand-logo" height={150} src="/omni.jpg" width={200} />
-      <div><p className="brand-title">Service desk</p><p className="brand-caption">{caption}</p></div>
+      <div><p className="brand-title">IT service desk</p><p className="brand-caption">{caption}</p></div>
     </div>
   );
 }

@@ -74,6 +74,7 @@ class LogoutView(APIView):
         return Response({"detail": "Logged out successfully."})
 
 
+@method_decorator(ensure_csrf_cookie, name="dispatch")
 class CurrentUserView(APIView):
     permission_classes = (IsAuthenticated,)
 
