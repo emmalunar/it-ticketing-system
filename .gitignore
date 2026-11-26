@@ -21,6 +21,11 @@ db.sqlite3
 media/
 .backups/
 
+# Uploaded ticket artifacts (user data — never commit).
+# Anchored: must NOT match the backend/apps/tickets/ source package.
+/tickets/
+/backend/tickets/
+
 # Node
 node_modules/
 .next/
@@ -33,6 +38,10 @@ pnpm-debug.log*
 # IDE
 .vscode/
 .idea/
+.qoder/
+
+# Local service scaffolds (supabase init output; nothing in the app reads it)
+supabase/
 
 # OS
 .DS_Store

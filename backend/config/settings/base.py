@@ -42,6 +42,14 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024
+FILE_UPLOAD_HANDLERS = [
+    "apps.tickets.upload_handlers.AttachmentSizeLimitUploadHandler",
+    "django.core.files.uploadhandler.MemoryFileUploadHandler",
+    "django.core.files.uploadhandler.TemporaryFileUploadHandler",
+]
+FILE_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024
+
 ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [

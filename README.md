@@ -27,9 +27,15 @@ Implementation should follow:
 
 ## Development Status
 
-Project documentation completed.
+Core backend is implemented and covered by the test suite: authentication with the USER/AGENT/ADMIN role matrix, tickets with the documented status machine, priority queue with SLA escalation, internal messaging, attachments with upload validation, one-time feedback tokens, and admin endpoints. A working single-page frontend covers login, requester, officer, and admin flows. Real-time updates, search, reports, and notifications are still pending; `docs/` remains the authoritative specification.
 
-Implementation phase: Project Foundation.
+## Attachment storage
+
+Uploaded ticket files are stored under `backend/media/` (`MEDIA_ROOT`) as `tickets/<ticket-uuid>/<file>`. Uploads are user data and are never committed to git; `backend/media/` is Git-ignored.
+
+## Running tests safely
+
+From `backend/`, a plain `python -m pytest` runs against a local SQLite database by default. To run the suite against PostgreSQL as CI does, set `USE_SQLITE=false` explicitly (with the local Compose or Supabase database configured), for example `USE_SQLITE=false python -m pytest -q`.
 
 ## Local Foundation Commands
 

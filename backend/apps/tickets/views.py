@@ -1,6 +1,8 @@
 import mimetypes
 import uuid
+import xml.etree.ElementTree as ElementTree
 
+from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db.models import Exists, OuterRef, Q
 from django.http import FileResponse
@@ -39,7 +41,7 @@ from apps.tickets.serializers import (
 )
 
 
-MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+MAX_ATTACHMENT_SIZE = settings.MAX_ATTACHMENT_SIZE
 ALLOWED_ATTACHMENT_TYPES = {
     "application/pdf",
     "image/jpeg",
@@ -49,6 +51,38 @@ ALLOWED_ATTACHMENT_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
+
+
+def _validate_image_content(upload, content_type):
+    if content_type not in {"image/png", "image/jpeg", "image/svg+xml"}:
+        return
+
+    upload.seek(0)
+    content = upload.read()
+    upload.seek(0)
+    if content_type == "image/png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValidationError({"file": "The uploaded file is not a valid PNG image."})
+    if content_type == "image/jpeg" and not content.startswith(b"\xff\xd8\xff"):
+        raise ValidationError({"file": "The uploaded file is not a valid JPEG image."})
+    if content_type == "image/svg+xml":
+        try:
+            if b"<!DOCTYPE" in content.upper() or b"<!ENTITY" in content.upper():
+                raise ValueError("External declarations are not allowed.")
+            root = ElementTree.fromstring(content)
+        except (ElementTree.ParseError, ValueError) as error:
+            raise ValidationError({"file": "The uploaded file is not a safe SVG image."}) from error
+        if not root.tag.lower().endswith("svg"):
+            raise ValidationError({"file": "The uploaded file is not a valid SVG image."})
+        for element in root.iter():
+            local_name = element.tag.rsplit("}", 1)[-1].lower()
+            if local_name in {"script", "foreignobject", "style"}:
+                raise ValidationError({"file": "SVG images cannot contain scripts or embedded content."})
+            for name, value in element.attrib.items():
+                local_name = name.rsplit("}", 1)[-1].lower()
+                if local_name.startswith("on") or local_name in {"href", "src"} and not value.startswith("#"):
+                    raise ValidationError({"file": "SVG images cannot contain active or external content."})
+                if local_name == "style" and "url(" in value.lower():
+                    raise ValidationError({"file": "SVG images cannot load external content."})
 
 
 class TicketViewSet(viewsets.ModelViewSet):
@@ -213,10 +247,11 @@ class TicketViewSet(viewsets.ModelViewSet):
         if upload is None:
             raise ValidationError({"file": "A file is required."})
         if upload.size > MAX_ATTACHMENT_SIZE:
-            raise ValidationError({"file": "Files must be 10 MB or smaller."})
+            raise ValidationError({"file": "Files must be 5 MB or smaller."})
         content_type = upload.content_type or mimetypes.guess_type(upload.name)[0]
         if content_type not in ALLOWED_ATTACHMENT_TYPES:
             raise ValidationError({"file": "This file type is not allowed."})
+        _validate_image_content(upload, content_type)
         if request.user.role == User.Role.USER and ticket.user_id != request.user.id:
             raise PermissionDenied("You cannot attach files to this ticket.")
         visibility = request.data.get("visibility", Attachment.Visibility.USER_VISIBLE)
@@ -386,11 +421,16 @@ class AttachmentDownloadView(APIView):
         ):
             raise PermissionDenied("You cannot access this attachment.")
         if request.user.role == User.Role.AGENT:
-            if not AgentStation.objects.filter(
+            has_station_access = AgentStation.objects.filter(
                 agent=request.user,
                 station=attachment.ticket.station,
                 is_active=True,
-            ).exists():
+            ).exists()
+            has_assignment_history = TicketAssignment.objects.filter(
+                agent=request.user,
+                ticket=attachment.ticket,
+            ).exists()
+            if not has_station_access and not has_assignment_history:
                 raise PermissionDenied("You are not assigned to this ticket's station.")
         if not default_storage.exists(attachment.storage_key):
             return Response({"detail": "Attachment is unavailable."}, status=status.HTTP_404_NOT_FOUND)
@@ -398,7 +438,13 @@ class AttachmentDownloadView(APIView):
             default_storage.open(attachment.storage_key, "rb"),
             content_type=attachment.content_type,
         )
-        response["Content-Disposition"] = f'attachment; filename="{attachment.file_name}"'
+        from django.utils.http import content_disposition_header
+
+        response["Content-Disposition"] = content_disposition_header(
+            as_attachment=True,
+            filename=attachment.file_name,
+        )
+        response["X-Content-Type-Options"] = "nosniff"
         return response
 
 

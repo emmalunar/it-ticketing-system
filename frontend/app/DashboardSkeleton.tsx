@@ -1,34 +1,31 @@
 export default function DashboardSkeleton() {
   return (
-    <main aria-busy="true" className="app-shell loading-screen min-h-screen">
-      <p className="sr-only" role="status">Connecting to the service desk…</p>
-      <div aria-hidden="true" className="loading-layout">
-        <aside className="loading-sidebar">
-          <div className="loading-skeleton loading-brand" />
-          <div className="loading-skeleton loading-nav" />
-          <div className="loading-skeleton loading-nav" />
-          <div className="loading-skeleton loading-profile" />
-        </aside>
-        <section className="loading-main">
-          <header className="loading-header">
-            <div>
-              <div className="loading-skeleton loading-eyebrow" />
-              <div className="loading-skeleton loading-title" />
-            </div>
-            <div className="loading-skeleton loading-action" />
-          </header>
-          <div className="loading-content">
-            <div className="loading-skeleton loading-hero" />
-            <div className="loading-metrics">
-              <div className="loading-skeleton loading-metric" />
-              <div className="loading-skeleton loading-metric" />
-              <div className="loading-skeleton loading-metric" />
-              <div className="loading-skeleton loading-metric" />
-            </div>
-            <div className="loading-skeleton loading-panel" />
-          </div>
-        </section>
+    <div aria-busy="true" className="loading-layout">
+      <p className="sr-only" role="status">
+        Connecting to the service desk…
+      </p>
+      <div aria-hidden="true" className="loading-sidebar">
+        <div className="skeleton loading-brand" />
+        <div className="skeleton loading-nav" />
+        <div className="skeleton loading-nav" />
+        <div className="skeleton loading-nav" />
+        <div className="skeleton loading-profile" />
       </div>
-    </main>
+      <div aria-hidden="true" className="loading-main">
+        <div className="loading-topbar" />
+        <div className="loading-content">
+          <div className="skeleton loading-title" />
+          <div className="skeleton loading-subtitle" />
+          <div className="skeleton loading-hero" />
+          <div className="loading-stats">
+            <div className="skeleton loading-stat" />
+            <div className="skeleton loading-stat" />
+            <div className="skeleton loading-stat" />
+            <div className="skeleton loading-stat" />
+          </div>
+          <div className="skeleton loading-panel" />
+        </div>
+      </div>
+    </div>
   );
 }
